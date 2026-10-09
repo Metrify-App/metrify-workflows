@@ -1,20 +1,39 @@
-# Example consumer Makefile for Metrify-App/metrify-workflows (Node.js service).
-# Copy it, then replace the commands with your stack's. Contract: docs/contract.md.
+# Example consumer Makefile for Metrify-App/metrify-workflows (Node.js service), following the
+# Metrify make verbs (metrify-template STANDARD.md). Replace the commands with your stack's.
 IMAGE ?= example-service:dev
 
-.PHONY: install lint test build docker-build
+.DEFAULT_GOAL := help
+.PHONY: help install dev format format-check lint typecheck test fix check docker-build
 
-install:
-	npm ci
+help: ## Show this help
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "    %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-lint: install
-	npm run lint
+install: ## Install dependencies
+	npm ci --no-fund --no-audit
 
-test: install
+dev: ## Run the project locally
+	npm run dev
+
+format: ## Format the code
+	npx prettier --write .
+
+format-check: ## Check formatting
+	npx prettier --check .
+
+lint: ## Lint
+	npx eslint .
+
+typecheck: ## Type check
+	npx tsc --noEmit
+
+test: ## Run the tests
 	npm test
 
-build: install
-	npm run build
+fix: format ## Format and apply autofixable lint
+	npx eslint --fix .
 
-docker-build:
+check: format-check lint typecheck test ## Everything the CI runs
+
+# Optional verb: only for a repo that ships an image. Must tag $(IMAGE) and never push.
+docker-build: ## Build the Docker image
 	docker build -t $(IMAGE) .
