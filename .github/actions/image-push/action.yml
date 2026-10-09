@@ -49,17 +49,4 @@ runs:
         TAG_LIST: ${{ inputs.tag-list }}
       run: |
         read -ra tags <<<"$TAG_LIST"
-        refs=()
-        for tag in "${tags[@]}"; do
-          docker tag "$BUILD_REF" "$IMAGE:$tag"
-          docker push "$IMAGE:$tag"
-          refs+=("$IMAGE:$tag")
-        done
-        digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$BUILD_REF" |
-          grep -m1 "^$IMAGE@" | cut -d@ -f2)
-        {
-          echo "digest=$digest"
-          echo "tags<<METRIFY_TAGS"
-          printf '%s\n' "${refs[@]}"
-          echo "METRIFY_TAGS"
-        } >>"$GITHUB_OUTPUT"
+        "$GITHUB_ACTION_PATH/../../../scripts/push-image.sh" "$IMAGE" "$BUILD_REF" "${tags[@]}"
