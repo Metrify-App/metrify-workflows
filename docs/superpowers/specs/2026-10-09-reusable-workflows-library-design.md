@@ -13,7 +13,8 @@ reaches every consumer without editing them (for consumers that track `@v1` or `
 Success criteria:
 
 - A consumer CI is a few lines of YAML that call library workflows.
-- The library knows nothing about consumer stacks: it only calls standard Makefile rules.
+- The library knows nothing about consumer stacks: it only calls the make verbs of the Metrify
+  repo standard (`metrify-template`).
 - Docker images are pushed to GHCR with one shared naming convention, and only the library
   handles registries, tokens and tags.
 - The library is versioned (`vX.Y.Z` plus a floating major `vX`) and tests itself.
@@ -30,9 +31,11 @@ Prerequisites:
 
 | Topic | Decision |
 |---|---|
-| Building blocks | One reusable workflow (`workflow_call`) per Makefile rule, built on shared internal composite actions |
-| Missing rules | No detection, no flags: a consumer imports only the workflows whose rule it implements |
-| `make install` | Not a workflow. Consumers declare it as a Make prerequisite (`test: install`) when needed |
+| Make verbs | The Metrify standard (`metrify-template`, `STANDARD.md`): `help install dev format format-check lint typecheck test fix check` in every repo; `build` and `docker-build` optional |
+| Building blocks | One reusable workflow (`workflow_call`) per CI verb (`check`, `format-check`, `lint`, `typecheck`, `test`, `build`, `docker`), built on shared internal composite actions; `check.yml` is the default |
+| Conformity | `check.yml` first fails if the Makefile lacks a standard verb (read from make's rule database, nothing runs) |
+| Optional rules | A consumer imports `build.yml` or `docker.yml` only if it implements the optional verb |
+| `make install` | Not a workflow. Every workflow runs `make install` before its verb, as the template's CI did |
 | Tooling | Nix if the consumer has `flake.nix`, otherwise the GitHub runner image plus optional `*-version` inputs |
 | Nix cache | GitHub Actions cache (`nix-community/cache-nix-action`), keyed on `flake.lock` |
 | Docker handoff | `make docker-build IMAGE=<full name>`; the Makefile must tag its image with `$(IMAGE)` |
@@ -49,27 +52,38 @@ Prerequisites:
 
 ## 3. Makefile contract
 
-Consumer repositories provide a `Makefile` with standard rule names. The library only ever runs
-`make <rule>`; each repository decides what its rules do.
+The make verbs are those of the Metrify repo standard, defined in `Metrify-App/metrify-template`
+(`.claude/skills/metrify-sync/STANDARD.md`, "Make verbs"). That file is the source of truth; this
+section restates what the library relies on. Each repository decides what its verbs do.
 
-| Rule | Called by | Contract |
+**Standard verbs** (every repository has them; a verb with nothing to do prints
+`<verb>: nothing to do` and exits 0):
+
+| Verb | Does | Workflow |
 |---|---|---|
-| `lint` | `lint.yml` | Checks style and code quality. Non-zero exit fails the job. |
-| `test` | `test.yml` | Runs the tests. |
-| `build` | `build.yml` | Compiles the project. |
-| `docker-build` | `docker.yml` | Builds the image and tags it with `$(IMAGE)`. Must not push. |
-| `install` | nobody directly | Conventional name for installing dependencies. Other rules depend on it when needed. |
+| `help` | Lists targets (default goal) | none |
+| `install` | Installs dependencies | run first by every workflow |
+| `dev` | Runs the project locally | none |
+| `format` / `format-check` | Formats / checks formatting | `format-check.yml` |
+| `lint` | Lints | `lint.yml` |
+| `typecheck` | Type checks | `typecheck.yml` |
+| `test` | Runs the tests | `test.yml` |
+| `fix` | `format` + autofixable lint | none |
+| `check` | `format-check lint typecheck test`: what the CI runs | `check.yml` |
+
+**Optional verbs** (only in repositories that ship a binary or an image):
+
+| Verb | Does | Workflow |
+|---|---|---|
+| `build` | Compiles the project | `build.yml` |
+| `docker-build` | Builds the image tagged `$(IMAGE)`; never pushes | `docker.yml` |
 
 Rules:
 
-- A repository that does not implement a rule does not import the matching workflow.
-- Dependencies between rules are expressed in Make, so CI and local runs behave the same:
-
-  ```make
-  test: install
-  lint: install
-  ```
-
+- Every workflow runs `make install`, then its verb, in the same job.
+- `check.yml` first checks that the Makefile has every standard verb. It reads make's rule
+  database (`make -pRrq`), so no recipe runs, and fails with one annotation that names every
+  missing verb.
 - `docker-build` must honour the `IMAGE` variable and keep a local default:
 
   ```make
@@ -80,7 +94,7 @@ Rules:
   ```
 
 - Makefiles never log in to a registry, push, or handle tokens.
-- A repository with a `flake.nix` runs `nix develop --command make <rule>` in CI, so its
+- A repository with a `flake.nix` runs `nix develop --command make <verb>` in CI, so its
   devShell must provide `gnumake`.
 - The workflows need runner 2.336.0 or newer (self-repository syntax, section 4.2).
   GitHub-hosted runners qualify.
@@ -92,15 +106,19 @@ Rules:
 ```
 .github/
   workflows/
+    check.yml           # public: checks the standard verbs, runs `make check` (the default)
+    format-check.yml    # public: runs `make format-check`
     lint.yml            # public: runs `make lint`
+    typecheck.yml       # public: runs `make typecheck`
     test.yml            # public: runs `make test`
-    build.yml           # public: runs `make build`
+    build.yml           # public: runs `make build` (optional verb)
     docker.yml          # public: runs `make docker-build`, tags and pushes to GHCR
     ci.yml              # internal: static analysis, unit tests, self-tests
     release.yml         # internal: release-please and floating major tag
   actions/
     setup-env/action.yml  # internal: Nix or fallback toolchain, caches
-    run-make/action.yml   # internal: exports make-env, checks the rule, runs make
+    run-make/action.yml   # internal: exports make-env, runs `make install`, then the verb
+    check-verbs/action.yml # internal: fails when a standard verb is missing
     image-meta/action.yml # internal: image name, build reference and tags to push
     image-push/action.yml # internal: checks $(IMAGE) was built, logs in, tags and pushes
   actionlint.yaml         # ignores the `$/` syntax until actionlint knows it
@@ -110,6 +128,7 @@ scripts/
   docker-tags.sh        # computes image tags from the event and the push mode
   export-make-env.sh    # validates, masks and exports make-env lines
   run-make.sh           # checks the rule exists, then runs make (optionally in nix develop)
+  check-verbs.sh        # lists the standard verbs missing from the Makefile
   check-image.sh        # fails with a contract error when $(IMAGE) was not built
 tests/
   unit/                 # one plain-bash test file per script, plus a tiny assert library
@@ -117,8 +136,9 @@ tests/
   fixtures/
     plain/              # Makefile + Dockerfile, no flake (fallback path)
     bad-image/          # docker-build ignores $(IMAGE) (negative test)
+    missing-verbs/      # lacks standard verbs (negative test)
 flake.nix, flake.lock   # dev shell of the library itself (make, actionlint, zizmor, shellcheck, act)
-Makefile                # `make lint`, `make test` and `make act` for the library itself
+Makefile                # the standard verbs, plus `make act`, for the library itself
 examples/consumer/
   Makefile
   Dockerfile
@@ -135,8 +155,8 @@ version.txt             # maintained by release-please (simple release type)
 CLAUDE.md
 ```
 
-The library dogfoods its own contract: it has a `flake.nix` and a `Makefile`, and `ci.yml`
-calls `lint.yml` and `test.yml` on the repository root. This is also the self-test of the Nix
+The library dogfoods its own contract: it has a `flake.nix` and a `Makefile` with every standard
+verb, and `ci.yml` calls `check.yml` on the repository root. This is also the self-test of the Nix
 path, so there is no separate Nix fixture.
 
 ### 4.2 Flow of a public workflow
@@ -145,7 +165,9 @@ Example for `test.yml`:
 
 1. Check out the consumer repository.
 2. `uses: $/.github/actions/setup-env`
-3. `uses: $/.github/actions/run-make` with `rule: test`.
+3. `uses: $/.github/actions/run-make` with `rule: test`: `make install`, then `make test`.
+
+`check.yml` adds `uses: $/.github/actions/check-verbs` between steps 2 and 3.
 
 `$/` is GitHub's self-repository syntax (July 2026, github.com only, runner 2.336.0+). Inside a
 reusable workflow it resolves to the workflow's own repository at the exact commit that is
@@ -155,7 +177,7 @@ The runner downloads the whole repository at that commit, so composites reach th
 cross-repository smoke test from `Metrify-App/test-app` confirmed this on 2026-10-09; it
 replaced an earlier design that checked out the library at `job.workflow_sha`.
 
-`lint.yml` and `build.yml` are identical except for the rule. `docker.yml` adds the
+`format-check.yml`, `lint.yml`, `typecheck.yml` and `build.yml` are identical except for the verb. `docker.yml` adds the
 `image-meta` and `image-push` composites around `run-make` (section 6): workflow `run:` steps
 cannot reach the scripts without a checkout, so all Docker logic lives in composites.
 
@@ -184,7 +206,7 @@ cannot reach the scripts without a checkout, so all Docker logic lives in compos
    starting with `#` are skipped). Each non-empty value is masked with `::add-mask::` (with `%`,
    `\r` and `\n` escaped) and, once every line is valid, all pairs are appended to
    `$GITHUB_ENV`. A malformed line fails the step, naming its line number but never its value.
-2. `scripts/run-make.sh` checks the rule exists with `make -n <rule>`. When make reports
+2. `scripts/run-make.sh install`, then the verb. For each one, `scripts/run-make.sh` checks the rule exists with `make -n <rule>`. When make reports
    `No rule to make target '<rule>'`, it emits an `::error::` annotation that names the rule and
    points to `docs/contract.md`. Any other dry-run failure is left to the real run to report.
 3. Run `nix develop --command make <rule> <extra vars>` when a flake is present, otherwise
@@ -193,7 +215,7 @@ cannot reach the scripts without a checkout, so all Docker logic lives in compos
 
 ## 5. Workflow interface
 
-### 5.1 Common inputs (`lint`, `test`, `build`, `docker`)
+### 5.1 Common inputs (every public workflow)
 
 | Input | Type | Default | Purpose |
 |---|---|---|---|
@@ -273,13 +295,15 @@ Runs on pull requests and on pushes to `main`.
   mode, an uppercase owner, every `make-env` rule (including a value with `%`), the missing-rule
   annotation and the missing-image annotation.
 - **Self-tests:** jobs call the public workflows from the same commit (`uses: $/.github/workflows/<name>.yml`):
-  - `lint` and `test` on the repository root (dogfooding, Nix path and Nix cache);
-  - `lint`, `test`, `build` on `tests/fixtures/plain` with `node-version` set (fallback path);
+  - `check` on the repository root (dogfooding, Nix path and Nix cache);
+  - `check`, `format-check`, `lint`, `typecheck`, `test`, `build` on `tests/fixtures/plain`
+    (fallback path; its `test` verb fails unless `install` ran first);
   - `docker` on `tests/fixtures/plain` with `push: never`.
 - **Negative tests:** jobs that call a reusable workflow cannot use `continue-on-error`, so
   failure cases call the composites directly in a step with `continue-on-error: true`, then
   assert `steps.<id>.outcome == 'failure'`:
   - `run-make` with a rule that does not exist;
+  - `check-verbs` on `tests/fixtures/missing-verbs`;
   - `run-make` with a malformed `make-env` line;
   - the image check after `docker-build` on `tests/fixtures/bad-image`.
 - **Local runs:** `make act ARGS="-j <job>"` runs a `ci.yml` job in Docker with act. act 0.2.x
@@ -314,7 +338,7 @@ All documentation is in English.
 | Document | Content |
 |---|---|
 | `README.md` | Purpose, 5-minute quick start, list of workflows, `@v1` vs `@main` |
-| `docs/contract.md` | Makefile rules, `$(IMAGE)`, `test: install` pattern, Nix vs fallback |
+| `docs/contract.md` | Standard and optional verbs, `make install` first, `$(IMAGE)`, Nix vs fallback |
 | `docs/workflows.md` | Per workflow: inputs, secrets, outputs, permissions, tag table, common errors |
 | `docs/releasing.md` | Release process, breaking-change policy |
 | `examples/consumer/` | Copy-ready `Makefile`, `Dockerfile` and `.github/workflows/ci.yml` |
@@ -334,21 +358,34 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    uses: Metrify-App/metrify-workflows/.github/workflows/lint.yml@v1
-  test:
-    uses: Metrify-App/metrify-workflows/.github/workflows/test.yml@v1
+  check:
+    uses: Metrify-App/metrify-workflows/.github/workflows/check.yml@v1
     secrets:
       make-env: ${{ secrets.TEST_ENV }}
   docker:
-    needs: [lint, test]
+    needs: check
     permissions:
       contents: read
       packages: write
     uses: Metrify-App/metrify-workflows/.github/workflows/docker.yml@v1
 ```
 
-## 10. Out of scope
+## 10. Alignment with metrify-template
+
+`Metrify-App/metrify-template` owns the standard; this library implements its CI. The same change
+updates the template (its own branch and pull request, released as standard version 2 with its
+`bump.sh`):
+
+- `STANDARD.md` and `.claude/rules/metrify-rules.md`: an "Optional verbs" table (`build`,
+  `docker-build` with the `$(IMAGE)` contract) next to the standard verbs.
+- `Makefile`: an `##@ Optional` section showing `build` and `docker-build`, commented out.
+- `.github/workflows/ci.yml`: job `check` calls `check.yml@v1`; job `standard` keeps running
+  `check-standard.sh`; a commented `docker` job calls `docker.yml@v1` (no Docker Hub secrets).
+  It only works once `v1.0.0` of this library is released, so it merges after that release.
+- `metrify-setup` skill: the toolchain goes in the `check` job inputs (`node-version`...) or the
+  repo's `flake.nix`, not in CI steps.
+
+## 11. Out of scope
 
 - Multi-architecture images (`linux/arm64`).
 - Cleanup of old GHCR images.
