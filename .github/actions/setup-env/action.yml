@@ -1,0 +1,99 @@
+name: setup-env
+description: >-
+  Internal to metrify-workflows, not a public interface. Installs Nix when the working
+  directory has a flake.nix, otherwise the requested fallback toolchains, then restores caches.
+
+inputs:
+  working-directory:
+    description: Directory that contains the Makefile.
+    default: .
+  cache-scope:
+    description: Segment of the dependency cache key, usually the Makefile rule.
+    required: true
+  node-version:
+    description: Fallback only. Node.js version for actions/setup-node.
+    default: ""
+  python-version:
+    description: Fallback only. Python version for actions/setup-python.
+    default: ""
+  go-version:
+    description: Fallback only. Go version for actions/setup-go.
+    default: ""
+  cache-paths:
+    description: Extra paths to cache, one per line.
+    default: ""
+  cache-key-files:
+    description: Glob, relative to the repository root, hashed into the dependency cache key.
+    default: ""
+
+outputs:
+  use-nix:
+    description: "'true' when the working directory has a flake.nix, 'false' otherwise."
+    value: ${{ steps.detect.outputs.use-nix }}
+
+runs:
+  using: composite
+  steps:
+    - name: Detect flake.nix
+      id: detect
+      shell: bash
+      env:
+        WORKDIR: ${{ inputs.working-directory }}
+        VERSIONS: ${{ inputs.node-version }}${{ inputs.python-version }}${{ inputs.go-version }}
+        CACHE_PATHS: ${{ inputs.cache-paths }}
+        CACHE_KEY_FILES: ${{ inputs.cache-key-files }}
+      run: |
+        if [[ -n $CACHE_PATHS && -z $CACHE_KEY_FILES ]]; then
+          echo "::error::cache-paths is set but cache-key-files is empty: the cache would never be refreshed."
+          exit 1
+        fi
+        if [[ -f "$WORKDIR/flake.nix" ]]; then
+          echo "use-nix=true" >>"$GITHUB_OUTPUT"
+          if [[ -n $VERSIONS ]]; then
+            echo "::warning::$WORKDIR/flake.nix found: node-version, python-version and go-version are ignored, the Nix dev shell provides the tools."
+          fi
+        else
+          echo "use-nix=false" >>"$GITHUB_OUTPUT"
+        fi
+
+    - name: Install Nix
+      if: steps.detect.outputs.use-nix == 'true'
+      uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      with:
+        determinate: false
+
+    - name: Cache the Nix store
+      if: steps.detect.outputs.use-nix == 'true'
+      uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+      with:
+        primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles(format('{0}/flake.nix', inputs.working-directory), format('{0}/flake.lock', inputs.working-directory)) }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+        gc-max-store-size-linux: 1G
+
+    - name: Set up Node.js
+      if: steps.detect.outputs.use-nix == 'false' && inputs.node-version != ''
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        package-manager-cache: false
+
+    - name: Set up Python
+      if: steps.detect.outputs.use-nix == 'false' && inputs.python-version != ''
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Set up Go
+      if: steps.detect.outputs.use-nix == 'false' && inputs.go-version != ''
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: false
+
+    - name: Cache dependencies
+      if: inputs.cache-paths != ''
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.cache-paths }}
+        key: deps-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ hashFiles(inputs.cache-key-files) }}
+        restore-keys: deps-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-
