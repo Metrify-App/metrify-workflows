@@ -7,8 +7,11 @@ set -euo pipefail
 rule=${1:?usage: run-make.sh RULE [VAR=VALUE...]}
 shift
 
+# USE_NIX configures this script only: keep it out of the environment of the rules.
+use_nix=${USE_NIX:-false}
+unset USE_NIX
 runner=()
-[[ ${USE_NIX:-false} != true ]] || runner=(nix develop --command)
+[[ $use_nix != true ]] || runner=(nix develop --command)
 
 dry_run=$(mktemp)
 trap 'rm -f "$dry_run"' EXIT

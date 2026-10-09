@@ -8,12 +8,16 @@ trap 'rm -rf "$workdir"' EXIT
 cd "$workdir" || exit 1
 # Isolate from a calling make (`make test`), which would add "Entering directory" lines.
 unset MAKEFLAGS MFLAGS MAKELEVEL
+# Same for USE_NIX, which CI sets when the library tests itself through run-make.
+unset USE_NIX
 
 cat >Makefile <<'MAKEFILE'
 hello:
 	@echo hello
 show:
 	@echo "image=$(IMAGE)"
+env:
+	@echo "use_nix=$$USE_NIX"
 broken:
 	@exit 4
 MAKEFILE
@@ -24,6 +28,9 @@ assert_output "hello" "prints the rule output"
 
 run "$script" show IMAGE=ghcr.io/o/r:sha-0123456
 assert_output "image=ghcr.io/o/r:sha-0123456" "passes make variables"
+
+run env USE_NIX=false "$script" env
+assert_output "use_nix=" "does not leak USE_NIX to the rules"
 
 run "$script" missing
 assert_status 1 "fails on a missing rule"
