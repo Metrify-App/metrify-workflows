@@ -1,5 +1,8 @@
 name: ci
 
+# CI of the library itself: dogfooding (lint and test of this repository through its own
+# workflows), self-tests on fixtures, and contract error cases.
+
 on:
   pull_request:
   push:
@@ -7,9 +10,108 @@ on:
 
 permissions: {}
 
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  smoke:
-    name: smoke / job.workflow_sha
-    uses: $/.github/workflows/smoke.yml
+  lint:
+    name: library / lint
+    uses: $/.github/workflows/lint.yml
     permissions:
       contents: read
+
+  test:
+    name: library / test
+    uses: $/.github/workflows/test.yml
+    permissions:
+      contents: read
+
+  fixture-lint:
+    name: fixture / lint
+    uses: $/.github/workflows/lint.yml
+    permissions:
+      contents: read
+    with:
+      working-directory: tests/fixtures/plain
+      node-version: "24"
+
+  fixture-test:
+    name: fixture / test
+    uses: $/.github/workflows/test.yml
+    permissions:
+      contents: read
+    with:
+      working-directory: tests/fixtures/plain
+      cache-paths: tests/fixtures/plain/.cache
+      cache-key-files: tests/fixtures/plain/Makefile
+    secrets:
+      make-env: ${{ format('FIXTURE_TOKEN=run-{0}', github.run_id) }}
+
+  fixture-build:
+    name: fixture / build
+    uses: $/.github/workflows/build.yml
+    permissions:
+      contents: read
+    with:
+      working-directory: tests/fixtures/plain
+      python-version: "3.14"
+      go-version: "1.26"
+
+  contract-errors:
+    name: contract errors
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Missing rule
+        id: missing-rule
+        continue-on-error: true
+        uses: $/.github/actions/run-make
+        with:
+          rule: missing
+          working-directory: tests/fixtures/plain
+
+      - name: Malformed make-env
+        id: bad-env
+        continue-on-error: true
+        uses: $/.github/actions/run-make
+        with:
+          rule: lint
+          working-directory: tests/fixtures/plain
+          make-env: not a pair
+
+      - name: Cache paths without key files
+        id: bad-cache
+        continue-on-error: true
+        uses: $/.github/actions/setup-env
+        with:
+          cache-scope: test
+          cache-paths: tests/fixtures/plain/.cache
+
+      - name: Every case must have failed
+        env:
+          MISSING_RULE: ${{ steps.missing-rule.outcome }}
+          BAD_ENV: ${{ steps.bad-env.outcome }}
+          BAD_CACHE: ${{ steps.bad-cache.outcome }}
+        run: |
+          status=0
+          for case in MISSING_RULE BAD_ENV BAD_CACHE; do
+            if [[ ${!case} == failure ]]; then
+              echo "ok   $case failed as expected"
+            else
+              echo "::error::$case: expected failure, got ${!case}"
+              status=1
+            fi
+          done
+          exit "$status"

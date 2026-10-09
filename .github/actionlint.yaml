@@ -1,6 +1,6 @@
+# actionlint 1.7.12 predates GitHub's self-repository syntax (`uses: $/...`, July 2026).
 paths:
   .github/workflows/**/*.{yml,yaml}:
     ignore:
-      - 'property "workflow_(repository|sha)" is not defined in object type'
       - 'specifying action "\$/[^"]+" in invalid format because ref is missing'
       - 'reusable workflow call "\$/[^"]+" at "uses" is not following the format'
