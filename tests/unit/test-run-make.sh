@@ -36,6 +36,11 @@ run "$script" missing
 assert_status 1 "fails on a missing rule"
 assert_contains "::error::The Makefile has no 'missing' rule" "explains the missing rule"
 
+run "$script" install
+assert_status 1 "fails when install is missing"
+assert_contains "::error::The Makefile has no 'install' rule. Every Metrify repo has one" "explains that install is mandatory"
+assert_not_contains "stop calling the install workflow" "does not mention a workflow that does not exist"
+
 run "$script" broken
 assert_status 2 "propagates make's failure"
 assert_not_contains "::error::" "does not blame the contract when the rule fails"
