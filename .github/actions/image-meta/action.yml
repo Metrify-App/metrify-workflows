@@ -1,0 +1,46 @@
+name: image-meta
+description: >-
+  Internal to metrify-workflows, not a public interface. Computes the GHCR image name, the
+  reference to build and the tags to push, from the calling repository and event.
+
+inputs:
+  image-name:
+    description: Image name under ghcr.io/<owner>/. Empty means the repository name.
+    default: ""
+  push:
+    description: auto, always or never.
+    default: auto
+
+outputs:
+  image:
+    description: Full image name, without tag.
+    value: ${{ steps.meta.outputs.image }}
+  build-ref:
+    description: Reference `make docker-build` must produce (<image>:sha-<short sha>).
+    value: ${{ steps.meta.outputs.build-ref }}
+  tag-list:
+    description: Space-separated tags to push, empty when nothing must be pushed.
+    value: ${{ steps.meta.outputs.tag-list }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute image name and tags
+      id: meta
+      shell: bash
+      env:
+        REPOSITORY: ${{ github.repository }}
+        IMAGE_NAME: ${{ inputs.image-name }}
+        EVENT: ${{ github.event_name }}
+        REF: ${{ github.ref }}
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        PUSH_MODE: ${{ inputs.push }}
+      run: |
+        scripts="$GITHUB_ACTION_PATH/../../../scripts"
+        image=$("$scripts/image-name.sh" "$REPOSITORY" "$IMAGE_NAME")
+        tags=$("$scripts/docker-tags.sh" "$EVENT" "$REF" "$SHA" "$PUSH_MODE")
+        {
+          echo "image=$image"
+          echo "build-ref=$image:sha-${SHA:0:7}"
+          echo "tag-list=${tags//$'\n'/ }"
+        } >>"$GITHUB_OUTPUT"

@@ -1,0 +1,65 @@
+name: image-push
+description: >-
+  Internal to metrify-workflows, not a public interface. Checks that `make docker-build`
+  produced the expected image, then tags it and pushes it to GHCR when tags are given.
+
+inputs:
+  image:
+    description: Full image name, without tag.
+    required: true
+  build-ref:
+    description: Reference `make docker-build` was asked to produce.
+    required: true
+  tag-list:
+    description: Space-separated tags to push. Empty means check only.
+    default: ""
+
+outputs:
+  tags:
+    description: Newline-separated image references that were pushed, empty if none.
+    value: ${{ steps.push.outputs.tags }}
+  digest:
+    description: Digest of the pushed image, empty if nothing was pushed.
+    value: ${{ steps.push.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the image honours $(IMAGE)
+      shell: bash
+      env:
+        BUILD_REF: ${{ inputs.build-ref }}
+      run: '"$GITHUB_ACTION_PATH/../../../scripts/check-image.sh" "$BUILD_REF"'
+
+    - name: Log in to GHCR
+      if: inputs.tag-list != ''
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - name: Tag and push
+      id: push
+      if: inputs.tag-list != ''
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        BUILD_REF: ${{ inputs.build-ref }}
+        TAG_LIST: ${{ inputs.tag-list }}
+      run: |
+        read -ra tags <<<"$TAG_LIST"
+        refs=()
+        for tag in "${tags[@]}"; do
+          docker tag "$BUILD_REF" "$IMAGE:$tag"
+          docker push "$IMAGE:$tag"
+          refs+=("$IMAGE:$tag")
+        done
+        digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$BUILD_REF" |
+          grep -m1 "^$IMAGE@" | cut -d@ -f2)
+        {
+          echo "digest=$digest"
+          echo "tags<<METRIFY_TAGS"
+          printf '%s\n' "${refs[@]}"
+          echo "METRIFY_TAGS"
+        } >>"$GITHUB_OUTPUT"
