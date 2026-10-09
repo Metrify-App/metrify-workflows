@@ -20,9 +20,8 @@ Success criteria:
 
 Prerequisites:
 
-- **The repository is public.** Public workflows check out the library itself (section 4.2).
-  A consumer's `GITHUB_TOKEN` can only read its own repository, so that checkout fails when the
-  library is private. The library contains no secret and no business code.
+- **The repository is public**, so every consumer can call it without access settings or
+  tokens. The library contains no secret and no business code.
 - The older private repository `Metrify-App/github-workflows` (`docker-build-push.yml`,
   repository mirroring) is replaced by this library over time. Migrating its consumers, its
   mirroring workflows and archiving it are out of scope here.
@@ -43,6 +42,7 @@ Prerequisites:
 | Make secrets | One optional multi-line secret `make-env` (`KEY=VALUE` lines) |
 | Library releases | release-please, `CHANGELOG.md`, floating major tag `vX` |
 | Recommended consumer ref | `@v1` |
+| Internal actions | Loaded with GitHub's self-repository syntax (`uses: $/...`), which resolves to this repository at the commit of the running workflow |
 | Library tests | actionlint + zizmor + shellcheck, unit tests for every script, self-tests (dogfooding + fixtures) |
 | Dependency caches | Only through `cache-paths` / `cache-key-files`; built-in `setup-*` caches are disabled |
 | Docs | All in this repository, in English |
@@ -82,9 +82,8 @@ Rules:
 - Makefiles never log in to a registry, push, or handle tokens.
 - A repository with a `flake.nix` runs `nix develop --command make <rule>` in CI, so its
   devShell must provide `gnumake`.
-- The library is checked out into `.metrify-workflows/` inside the workspace during CI
-  (section 4.2). Consumers exclude that directory from their linters and from the Docker build
-  context (`.dockerignore`).
+- The workflows need runner 2.336.0 or newer (self-repository syntax, section 4.2).
+  GitHub-hosted runners qualify.
 
 ## 4. Architecture
 
@@ -102,7 +101,9 @@ Rules:
   actions/
     setup-env/action.yml  # internal: Nix or fallback toolchain, caches
     run-make/action.yml   # internal: exports make-env, checks the rule, runs make
-  actionlint.yaml         # ignores job.workflow_* until actionlint knows them
+    image-meta/action.yml # internal: image name, build reference and tags to push
+    image-push/action.yml # internal: checks $(IMAGE) was built, logs in, tags and pushes
+  actionlint.yaml         # ignores the `$/` syntax until actionlint knows it
   dependabot.yml          # keeps pinned action SHAs up to date
 scripts/
   image-name.sh         # ghcr.io/<lowercase owner>/<image name>
@@ -112,11 +113,12 @@ scripts/
   check-image.sh        # fails with a contract error when $(IMAGE) was not built
 tests/
   unit/                 # one plain-bash test file per script, plus a tiny assert library
+  act/run.sh            # runs ci.yml locally with act (`make act`)
   fixtures/
     plain/              # Makefile + Dockerfile, no flake (fallback path)
     bad-image/          # docker-build ignores $(IMAGE) (negative test)
-flake.nix, flake.lock   # dev shell of the library itself (actionlint, zizmor, shellcheck, make)
-Makefile                # `make lint` and `make test` for the library itself
+flake.nix, flake.lock   # dev shell of the library itself (make, actionlint, zizmor, shellcheck, act)
+Makefile                # `make lint`, `make test` and `make act` for the library itself
 examples/consumer/
   Makefile
   Dockerfile
@@ -142,19 +144,20 @@ path, so there is no separate Nix fixture.
 Example for `test.yml`:
 
 1. Check out the consumer repository.
-2. Check out the library itself, `${{ job.workflow_repository }}` at `${{ job.workflow_sha }}`,
-   into `.metrify-workflows/`. This guarantees the composites run at exactly the same version as
-   the workflow the consumer referenced (`@v1`, `@main` or a SHA), instead of a hard-coded ref.
-   These `job.*` context properties exist on github.com since September 2026 (not on GHES).
-   The checkout is sparse (`.github/actions` and `scripts` only) and `.metrify-workflows/` is
-   added to `.git/info/exclude`. Because local `uses:` paths must live in the workspace, the
-   directory is visible to the consumer's rules: `docs/contract.md` tells consumers to exclude
-   `.metrify-workflows/` from linters and from the Docker build context (`.dockerignore`).
-3. `uses: ./.metrify-workflows/.github/actions/setup-env`
-4. `uses: ./.metrify-workflows/.github/actions/run-make` with `rule: test`.
+2. `uses: $/.github/actions/setup-env`
+3. `uses: $/.github/actions/run-make` with `rule: test`.
 
-`lint.yml` and `build.yml` are identical except for the rule. `docker.yml` adds the tagging,
-login and push steps (section 6).
+`$/` is GitHub's self-repository syntax (July 2026, github.com only, runner 2.336.0+). Inside a
+reusable workflow it resolves to the workflow's own repository at the exact commit that is
+running, so the composites always match the ref the consumer chose (`@v1`, `@main` or a SHA).
+The runner downloads the whole repository at that commit, so composites reach the scripts as
+`$GITHUB_ACTION_PATH/../../../scripts/`. Nothing is written to the consumer's workspace. A
+cross-repository smoke test from `Metrify-App/test-app` confirmed this on 2026-10-09; it
+replaced an earlier design that checked out the library at `job.workflow_sha`.
+
+`lint.yml` and `build.yml` are identical except for the rule. `docker.yml` adds the
+`image-meta` and `image-push` composites around `run-make` (section 6): workflow `run:` steps
+cannot reach the scripts without a checkout, so all Docker logic lives in composites.
 
 ### 4.3 `setup-env` composite
 
@@ -262,15 +265,14 @@ explaining the `$(IMAGE)` contract.
 
 Runs on pull requests and on pushes to `main`.
 
-- **Static analysis** (`make lint`): `actionlint` (syntax and expressions), `zizmor` on explicit
-  paths (`.github examples tests`, never the `.metrify-workflows/` checkout), `shellcheck` on
-  `scripts/` and `tests/`. actionlint does not know `job.workflow_repository` and
-  `job.workflow_sha` yet, so `.github/actionlint.yaml` ignores exactly those two errors.
+- **Static analysis** (`make lint`): `actionlint` (syntax and expressions), `zizmor` on
+  `.github examples tests`, `shellcheck` on `scripts/` and `tests/`. actionlint 1.7.12 does not
+  know the `$/` syntax yet, so `.github/actionlint.yaml` ignores exactly those two errors.
 - **Unit tests** (`make test`): plain bash, no dependency besides `make`. They cover every row of
   the table in section 6, the `always`/`never` modes, a malformed release tag, an unknown push
   mode, an uppercase owner, every `make-env` rule (including a value with `%`), the missing-rule
   annotation and the missing-image annotation.
-- **Self-tests:** jobs call the public workflows locally (`uses: ./.github/workflows/<name>.yml`):
+- **Self-tests:** jobs call the public workflows from the same commit (`uses: $/.github/workflows/<name>.yml`):
   - `lint` and `test` on the repository root (dogfooding, Nix path and Nix cache);
   - `lint`, `test`, `build` on `tests/fixtures/plain` with `node-version` set (fallback path);
   - `docker` on `tests/fixtures/plain` with `push: never`.
@@ -280,6 +282,10 @@ Runs on pull requests and on pushes to `main`.
   - `run-make` with a rule that does not exist;
   - `run-make` with a malformed `make-env` line;
   - the image check after `docker-build` on `tests/fixtures/bad-image`.
+- **Local runs:** `make act ARGS="-j <job>"` runs a `ci.yml` job in Docker with act. act 0.2.x
+  rejects `$/` (nektos/act#6189), so `tests/act/run.sh` runs a copy of the tree where `$/` is
+  rewritten to `./` (equivalent inside this repository). Jobs that install Nix need a systemd
+  host and are better checked with `make lint test`.
 - All third-party actions are pinned by commit SHA with a version comment; Dependabot updates
   them.
 

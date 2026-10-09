@@ -4,7 +4,7 @@
 
 **Goal:** Build `Metrify-App/metrify-workflows`, a library of reusable GitHub Actions workflows (`lint`, `test`, `build`, `docker`). Each one runs one standard Makefile rule of the calling repository, and `docker` pushes images to GHCR with a shared tag convention.
 
-**Architecture:** One public reusable workflow (`workflow_call`) per Makefile rule. Each one checks out the library itself at `job.workflow_sha`, so its two internal composites (`setup-env`, `run-make`) always come from the same commit as the workflow the consumer referenced. All non-trivial logic lives in `scripts/*.sh` and is unit-tested in plain bash. The library dogfoods its own contract (`flake.nix` + `Makefile`), runs self-tests on fixture consumers in `ci.yml`, and releases with release-please plus a floating major tag `vX`.
+**Architecture:** One public reusable workflow (`workflow_call`) per Makefile rule. Each one loads its internal composites (`setup-env`, `run-make`, and for Docker `image-meta`, `image-push`) with GitHub's self-repository syntax `uses: $/...`, which resolves to this repository at the commit of the running workflow, whatever ref the consumer referenced. All non-trivial logic lives in `scripts/*.sh` and is unit-tested in plain bash. The library dogfoods its own contract (`flake.nix` + `Makefile`), runs self-tests on fixture consumers in `ci.yml`, and releases with release-please plus a floating major tag `vX`.
 
 **Tech Stack:** GitHub Actions (reusable workflows, composite actions), bash 5, GNU make, Nix flakes, actionlint 1.7.12, zizmor, shellcheck, release-please-action v5, GHCR.
 
@@ -30,6 +30,7 @@
 - Image names: `ghcr.io/<lowercase owner>/<lowercase image-name>`. The build tag is always `sha-<first 7 chars of commit>`.
 - Push tags (`push: auto`): PR → none; `main` → `sha-<short>` + `latest`; `develop` → `sha-<short>` + `develop`; tag `vX.Y.Z` → `sha-<short>` + `vX.Y.Z`; anything else → none.
 - Architecture: `linux/amd64` only.
+- Internal composites and in-repo workflows are referenced with `uses: $/...` (self-repository syntax), never `./...` and never a checkout of the library.
 - Outward-facing actions (changing repository visibility or settings, the first push, opening or merging pull requests, publishing releases, pushing to another repository) need an explicit "yes" from the user at execution time, even when this plan lists them.
 
 ## Script interfaces
@@ -48,14 +49,16 @@ Composite interfaces (Task 6), used by Tasks 7 and 8:
 
 - `.github/actions/setup-env`: inputs `working-directory` (`.`), `cache-scope` (required), `node-version`, `python-version`, `go-version`, `cache-paths`, `cache-key-files` (all default `""`). Output `use-nix` (`'true'` or `'false'`).
 - `.github/actions/run-make`: inputs `rule` (required), `working-directory` (`.`), `use-nix` (`"false"`), `make-args` (space-separated `VAR=VALUE`, default `""`), `make-env` (default `""`).
+- `.github/actions/image-meta` (Task 8): inputs `image-name` (`""`), `push` (`auto`). Outputs `image`, `build-ref` (`<image>:sha-<short>`), `tag-list` (space-separated, empty when nothing is pushed).
+- `.github/actions/image-push` (Task 8): inputs `image`, `build-ref` (required), `tag-list` (`""`: check only). Outputs `tags` (newline-separated pushed references), `digest`.
 
 ## Review Focus
 
 These five risks are implied by the spec but not covered by any unit test. Each one has a check pinned in the task that owns it.
 
-1. **Pull request runs: checking out the library at `job.workflow_sha`.** On `pull_request`, the workflow commit is the temporary merge commit. The checkout must still succeed. Pinned in Task 2, Step 6 (smoke test on a real PR).
+1. **Pull request runs and cross-repository calls resolve `$/` to the library commit.** Checked in Task 2 (in-repo PR run and a throwaway caller in `Metrify-App/test-app`, both green on 2026-10-09).
 2. **Masking `make-env` values when make prints them.** A value echoed by a rule must show as `***` in the log. Pinned in Task 7, Step 9 (the fixture test rule echoes `FIXTURE_TOKEN`, and the log is inspected).
-3. **A consumer in another repository** calling `@<branch>` (the library is public, the checkout is cross-repository). The in-repo self-tests cannot cover this. Pinned in Task 11, Step 3 (a throwaway consumer branch, run only after a "yes").
+3. **A consumer in another repository** calling `@<branch>` (full workflows, not just the smoke composite). The in-repo self-tests cannot cover this. Pinned in Task 11, Step 3 (a throwaway consumer branch, run only after a "yes").
 4. **Nix consumers whose devShell lacks `gnumake`** get `make: command not found`, not the contract error. This is documented as a known error in Task 10 (`docs/workflows.md`, "Common errors"). Dogfooding (Task 7) proves the happy path.
 5. **First release and the floating tag.** `release-please` must create `v1.0.0`, and `major-tag` must create `v1` through the API with `GITHUB_TOKEN`. Pinned in Task 11, Steps 5 and 6.
 
@@ -63,11 +66,11 @@ These five risks are implied by the spec but not covered by any unit test. Each 
 
 ### Task 0: Publish the repository skeleton
 
-The remote `Metrify-App/metrify-workflows` is empty and private. It must have a `main` branch to open pull requests against, and it must be public for consumers (spec §1). Local branch `design-spec` holds the approved spec and this plan.
+The remote `Metrify-App/metrify-workflows` is empty and private. It must have a `main` branch to open pull requests against, and it must be public for consumers (spec §1). Local branch `design-spec` holds the approved spec (4 commits).
 
 **Files:** none.
 
-- [ ] **Step 1: Ask the user for a "yes"** to all three actions below, in one message: (a) push `design-spec` as the initial `main`, which contains only the spec and this plan; (b) make the repository public; (c) push the `reusable-workflows` branch as work progresses. Do not continue without it.
+- [ ] **Step 1: Ask the user for a "yes"** to all three actions below, in one message: (a) push `design-spec` as the initial `main`, which contains only the approved spec; (b) make the repository public; (c) push the `reusable-workflows` branch as work progresses. Do not continue without it.
 
 - [ ] **Step 2: Push the spec as `main`**
 
@@ -121,6 +124,7 @@ Expected: `Switched to a new branch 'reusable-workflows'`
             actionlint
             zizmor
             shellcheck
+            act
           ];
         };
       });
@@ -140,7 +144,6 @@ use flake
 `.gitignore`:
 ```
 .direnv/
-.metrify-workflows/
 tests/fixtures/plain/.cache/
 ```
 
@@ -265,134 +268,19 @@ git add flake.nix flake.lock .envrc .gitignore Makefile tests/unit
 git commit -m "build(ci): add dev shell, Makefile and unit-test harness"
 ```
 
-### Task 2: Prove `job.workflow_sha` self-checkout on GitHub
+### Task 2: Prove how a called workflow reaches its own commit (done, 2026-10-09)
 
-This task de-risks the one assumption no local tool can check. A called workflow must be able to check out its own commit through `job.workflow_repository` and `job.workflow_sha`, on both `push` and `pull_request`. `smoke.yml` is temporary and is deleted in Task 7.
+This task de-risked the one assumption no local tool can check. It ran with a deviation recorded in the ledger. The flake's zizmor 1.30.1 flagged the `./` syntax (audit `self-repository`) and pointed to GitHub's self-repository syntax `uses: $/...` (July 2026). The smoke test therefore compared both mechanisms: the `job.workflow_sha` checkout and a composite loaded through `$/`. Both passed in-repo on PR #1, and from a throwaway caller in `Metrify-App/test-app`. In the cross-repository run, `$/` downloaded `Metrify-App/metrify-workflows@<workflow commit>` with the whole tree. The user then chose `$/`, and spec §4.2 was rewritten.
 
-**Files:**
-- Create: `.github/actionlint.yaml`, `.github/zizmor.yml`, `.github/workflows/smoke.yml`, `.github/workflows/ci.yml`
-- Modify: `Makefile` (the `lint` rule)
+**Commits:** `8e742eb..b64b88b` (`ci(ci): smoke-test self checkout and the self-repository syntax`). They added:
+- `.github/actionlint.yaml`;
+- `.github/zizmor.yml`;
+- `.github/workflows/smoke.yml`;
+- `.github/actions/smoke/action.yml`;
+- a `ci.yml` calling `$/.github/workflows/smoke.yml`;
+- `actionlint` and `zizmor` in `make lint`.
 
-- [ ] **Step 1: Add actionlint and zizmor to `make lint`.** Replace the `lint` rule of `Makefile` with:
-
-```make
-.PHONY: lint
-lint: ## Static analysis of workflows, actions and scripts
-	actionlint
-	zizmor --offline --config .github/zizmor.yml $(wildcard .github examples tests)
-	shellcheck -x $(wildcard scripts/*.sh tests/unit/*.sh)
-```
-
-- [ ] **Step 2: Write `.github/workflows/smoke.yml` and `.github/workflows/ci.yml`**
-
-`smoke.yml`:
-```yaml
-name: smoke
-
-# Temporary (removed in Task 7): proves that a called workflow can check out its own commit
-# through job.workflow_repository and job.workflow_sha.
-
-on:
-  workflow_call:
-
-permissions: {}
-
-jobs:
-  checkout-self:
-    name: check out own commit
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Check out metrify-workflows at the workflow commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .metrify-workflows
-          sparse-checkout: |
-            .github
-          persist-credentials: false
-
-      - name: Show what was checked out
-        shell: bash
-        env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-          CALLER_SHA: ${{ github.sha }}
-        run: |
-          echo "workflow: $WORKFLOW_REPOSITORY@$WORKFLOW_SHA (caller github.sha: $CALLER_SHA)"
-          test -n "$WORKFLOW_REPOSITORY"
-          test -n "$WORKFLOW_SHA"
-          test "$(git -C .metrify-workflows rev-parse HEAD)" = "$WORKFLOW_SHA"
-          test -f .metrify-workflows/.github/workflows/smoke.yml
-```
-
-`ci.yml` (first version; it is replaced in Task 7):
-```yaml
-name: ci
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-
-permissions: {}
-
-jobs:
-  smoke:
-    name: smoke / job.workflow_sha
-    uses: ./.github/workflows/smoke.yml
-    permissions:
-      contents: read
-```
-
-- [ ] **Step 3: Run lint and see it fail**
-
-Run: `nix develop --command make lint`
-Expected: FAIL. actionlint reports `property "workflow_repository" is not defined in object type {check_run_id: number; ...}` (and the same for `workflow_sha`), because actionlint 1.7.12 predates these properties (added in September 2026).
-
-- [ ] **Step 4: Write `.github/actionlint.yaml` and `.github/zizmor.yml`**
-
-`.github/actionlint.yaml`:
-```yaml
-paths:
-  .github/workflows/**/*.{yml,yaml}:
-    ignore:
-      - 'property "workflow_(repository|sha)" is not defined in object type'
-```
-
-`.github/zizmor.yml`:
-```yaml
-# Third-party actions must be pinned by commit SHA. Metrify's own workflows are referenced by
-# their floating major tag (@v1) on purpose: that is how consumers receive fixes.
-rules:
-  unpinned-uses:
-    config:
-      policies:
-        "Metrify-App/*": ref-pin
-        "*": hash-pin
-```
-
-Run: `nix develop --command make lint && nix develop --command make test`
-Expected: actionlint prints nothing, zizmor prints `No findings to report. Good job!`, and shellcheck is clean. Both commands exit with 0.
-
-- [ ] **Step 5: Commit and push**
-
-```bash
-git add Makefile .github
-git commit -m "ci(ci): smoke-test self checkout through job.workflow_sha"
-git push -u origin reusable-workflows
-```
-
-- [ ] **Step 6: Run the smoke test on a real pull request**
-
-Run: `gh pr create --draft --base main --head reusable-workflows --title "feat: reusable workflows library" --body "Implements docs/superpowers/specs/2026-10-09-reusable-workflows-library-design.md. Work in progress."`
-Then run: `gh run watch --exit-status "$(gh run list --branch reusable-workflows --workflow ci --limit 1 --json databaseId --jq '.[0].databaseId')"`
-Expected: job `smoke / job.workflow_sha / check out own commit` succeeds. The log line `workflow: Metrify-App/metrify-workflows@<sha>` shows a non-empty SHA, which on a `pull_request` run is the merge commit.
-
-**If it fails, STOP.** Report the log to the user. The design depends on this mechanism (spec §4.2), so do not work around it silently.
+**Remaining step:** in Task 7, `.github/actionlint.yaml` is replaced (it drops the `job.workflow_*` ignores and keeps the `$/` ones), and the smoke files are deleted.
 
 ### Task 3: Image name and tag computation
 
@@ -879,7 +767,7 @@ git commit -m "feat(scripts): run a make rule and check the built image"
 - Create: `.github/actions/setup-env/action.yml`, `.github/actions/run-make/action.yml`
 
 **Interfaces:**
-- Consumes: `scripts/export-make-env.sh` and `scripts/run-make.sh`, reached from a composite as `$GITHUB_ACTION_PATH/../../../scripts/`. This works both when the library is checked out in `.metrify-workflows/` and in its own repository.
+- Consumes: `scripts/export-make-env.sh` and `scripts/run-make.sh`, reached from a composite as `$GITHUB_ACTION_PATH/../../../scripts/`. This works because a composite loaded through `$/` comes with the whole repository at that commit (checked in Task 2).
 - Produces: the two composites described in "Composite interfaces".
 
 - [ ] **Step 1: Write `.github/actions/setup-env/action.yml`**
@@ -1050,8 +938,9 @@ git commit -m "feat(setup-env,run-make): add internal composite actions"
 **Files:**
 - Create: `.github/workflows/lint.yml`, `.github/workflows/test.yml`, `.github/workflows/build.yml`
 - Create: `tests/fixtures/plain/Makefile`, `tests/fixtures/plain/Dockerfile`
-- Replace: `.github/workflows/ci.yml`
-- Delete: `.github/workflows/smoke.yml`
+- Replace: `.github/workflows/ci.yml`, `.github/actionlint.yaml`, `Makefile`, `flake.nix` (adds `act`), `.gitignore`
+- Create: `tests/act/run.sh`
+- Delete: `.github/workflows/smoke.yml`, `.github/actions/smoke/action.yml`
 
 **Interfaces:**
 - Consumes: the composites from Task 6.
@@ -1124,24 +1013,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same commit as this workflow, so the composites match the ref the caller chose.
-      - name: Check out metrify-workflows
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .metrify-workflows
-          sparse-checkout: |
-            .github/actions
-            scripts
-          persist-credentials: false
-
-      - name: Hide metrify-workflows from git
-        run: echo ".metrify-workflows/" >>.git/info/exclude
-
+      # `$/` loads the composites from this library at the commit of this workflow, whatever
+      # ref the caller used (@v1, @main, a SHA). No checkout of the library is needed.
       - name: Set up environment
         id: env
-        uses: ./.metrify-workflows/.github/actions/setup-env
+        uses: $/.github/actions/setup-env
         with:
           working-directory: ${{ inputs.working-directory }}
           cache-scope: lint
@@ -1152,7 +1028,7 @@ jobs:
           cache-key-files: ${{ inputs.cache-key-files }}
 
       - name: Run make lint
-        uses: ./.metrify-workflows/.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: lint
           working-directory: ${{ inputs.working-directory }}
@@ -1227,24 +1103,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same commit as this workflow, so the composites match the ref the caller chose.
-      - name: Check out metrify-workflows
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .metrify-workflows
-          sparse-checkout: |
-            .github/actions
-            scripts
-          persist-credentials: false
-
-      - name: Hide metrify-workflows from git
-        run: echo ".metrify-workflows/" >>.git/info/exclude
-
+      # `$/` loads the composites from this library at the commit of this workflow, whatever
+      # ref the caller used (@v1, @main, a SHA). No checkout of the library is needed.
       - name: Set up environment
         id: env
-        uses: ./.metrify-workflows/.github/actions/setup-env
+        uses: $/.github/actions/setup-env
         with:
           working-directory: ${{ inputs.working-directory }}
           cache-scope: test
@@ -1255,7 +1118,7 @@ jobs:
           cache-key-files: ${{ inputs.cache-key-files }}
 
       - name: Run make test
-        uses: ./.metrify-workflows/.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: test
           working-directory: ${{ inputs.working-directory }}
@@ -1330,24 +1193,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same commit as this workflow, so the composites match the ref the caller chose.
-      - name: Check out metrify-workflows
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .metrify-workflows
-          sparse-checkout: |
-            .github/actions
-            scripts
-          persist-credentials: false
-
-      - name: Hide metrify-workflows from git
-        run: echo ".metrify-workflows/" >>.git/info/exclude
-
+      # `$/` loads the composites from this library at the commit of this workflow, whatever
+      # ref the caller used (@v1, @main, a SHA). No checkout of the library is needed.
       - name: Set up environment
         id: env
-        uses: ./.metrify-workflows/.github/actions/setup-env
+        uses: $/.github/actions/setup-env
         with:
           working-directory: ${{ inputs.working-directory }}
           cache-scope: build
@@ -1358,7 +1208,7 @@ jobs:
           cache-key-files: ${{ inputs.cache-key-files }}
 
       - name: Run make build
-        uses: ./.metrify-workflows/.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: build
           working-directory: ${{ inputs.working-directory }}
@@ -1425,19 +1275,19 @@ concurrency:
 jobs:
   lint:
     name: library / lint
-    uses: ./.github/workflows/lint.yml
+    uses: $/.github/workflows/lint.yml
     permissions:
       contents: read
 
   test:
     name: library / test
-    uses: ./.github/workflows/test.yml
+    uses: $/.github/workflows/test.yml
     permissions:
       contents: read
 
   fixture-lint:
     name: fixture / lint
-    uses: ./.github/workflows/lint.yml
+    uses: $/.github/workflows/lint.yml
     permissions:
       contents: read
     with:
@@ -1446,7 +1296,7 @@ jobs:
 
   fixture-test:
     name: fixture / test
-    uses: ./.github/workflows/test.yml
+    uses: $/.github/workflows/test.yml
     permissions:
       contents: read
     with:
@@ -1458,7 +1308,7 @@ jobs:
 
   fixture-build:
     name: fixture / build
-    uses: ./.github/workflows/build.yml
+    uses: $/.github/workflows/build.yml
     permissions:
       contents: read
     with:
@@ -1481,7 +1331,7 @@ jobs:
       - name: Missing rule
         id: missing-rule
         continue-on-error: true
-        uses: ./.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: missing
           working-directory: tests/fixtures/plain
@@ -1489,7 +1339,7 @@ jobs:
       - name: Malformed make-env
         id: bad-env
         continue-on-error: true
-        uses: ./.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: lint
           working-directory: tests/fixtures/plain
@@ -1498,7 +1348,7 @@ jobs:
       - name: Cache paths without key files
         id: bad-cache
         continue-on-error: true
-        uses: ./.github/actions/setup-env
+        uses: $/.github/actions/setup-env
         with:
           cache-scope: test
           cache-paths: tests/fixtures/plain/.cache
@@ -1521,6 +1371,111 @@ jobs:
           exit "$status"
 ```
 
+- [ ] **Step 5b: Local tooling: actionlint config, act runner, Makefile, flake and .gitignore**
+
+`.github/actionlint.yaml` (the `job.workflow_*` ignores from Task 2 are no longer needed):
+```yaml
+# actionlint 1.7.12 predates GitHub's self-repository syntax (`uses: $/...`, July 2026).
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      - 'specifying action "\$/[^"]+" in invalid format because ref is missing'
+      - 'reusable workflow call "\$/[^"]+" at "uses" is not following the format'
+```
+
+`tests/act/run.sh` (make it executable):
+```bash
+#!/usr/bin/env bash
+# Runs the library's CI locally with act, on a copy of the working tree.
+# Usage: tests/act/run.sh [act arguments...]   e.g. tests/act/run.sh -j fixture-test
+#   act 0.2.x does not support the self-repository syntax (`uses: $/...`, nektos/act#6189).
+#   In this repository `$/` and `./` resolve to the same code, so the copy rewrites one into
+#   the other. Jobs that install Nix (library / lint, library / test) need a systemd host and
+#   are better checked with `make lint test` directly.
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+copy=$(mktemp -d)
+trap 'rm -rf "$copy"' EXIT
+
+git -C "$root" ls-files -z --cached --others --exclude-standard |
+  (cd "$root" && xargs -0 cp --parents -t "$copy")
+git -C "$copy" init -q
+find "$copy/.github" -name '*.yml' -exec sed -i 's#uses: \$/#uses: ./#' {} +
+
+cd "$copy"
+act pull_request -P ubuntu-latest=catthehacker/ubuntu:act-latest "$@"
+```
+
+`Makefile`:
+```make
+# Checks of the library itself. Run inside the dev shell: `nix develop --command make <rule>`
+# (direnv users: `use flake`). CI runs the same rules through the library's own workflows.
+SHELL := bash
+.SHELLFLAGS := -euo pipefail -c
+.DEFAULT_GOAL := help
+
+.PHONY: help
+help: ## Show this help
+	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-6s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: lint
+lint: ## Static analysis of workflows, actions and scripts
+	actionlint
+	zizmor --offline --config .github/zizmor.yml $(wildcard .github examples tests)
+	shellcheck -x $(wildcard scripts/*.sh tests/unit/*.sh tests/act/*.sh)
+
+.PHONY: test
+test: ## Unit tests of the scripts
+	tests/unit/run.sh
+
+.PHONY: act
+act: ## Run ci.yml locally with act; pass act options in ARGS, e.g. ARGS="-j fixture-test"
+	tests/act/run.sh $(ARGS)
+```
+
+`flake.nix`:
+```nix
+{
+  description = "Metrify reusable GitHub Actions workflows: development shell";
+
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+  outputs =
+    { self, nixpkgs }:
+    let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+    in
+    {
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.mkShell {
+          packages = with pkgs; [
+            gnumake
+            actionlint
+            zizmor
+            shellcheck
+            act
+          ];
+        };
+      });
+
+      formatter = forAllSystems (pkgs: pkgs.nixfmt-rfc-style);
+    };
+}
+```
+
+`.gitignore`:
+```
+.direnv/
+tests/fixtures/plain/.cache/
+```
+
 - [ ] **Step 6: Lint locally**
 
 Run: `nix develop --command make lint && nix develop --command make test`
@@ -1531,12 +1486,19 @@ Expected: both commands exit with 0, and zizmor reports `No findings to report.`
 ```bash
 git add .github/workflows/lint.yml .github/workflows/test.yml .github/workflows/build.yml
 git commit -m "feat(lint,test,build): add public make-rule workflows"
-git rm .github/workflows/smoke.yml
-git add tests/fixtures/plain .github/workflows/ci.yml
+git rm -r .github/workflows/smoke.yml .github/actions/smoke
+git add tests/fixtures/plain .github/workflows/ci.yml .github/actionlint.yaml
 git commit -m "test(ci): self-test workflows on the library and a plain fixture"
+git add tests/act Makefile flake.nix .gitignore
+git commit -m "build(ci): run ci.yml locally with act"
 ```
 
-Make the first commit right after Step 3, while the Task 2 `ci.yml` is still in place, and the second after Step 6. Run `nix develop --command make lint` before each one.
+Make the first commit right after Step 3, while the Task 2 `ci.yml` is still in place, and the other two after Step 6. Run `nix develop --command make lint` before each one.
+
+- [ ] **Step 7b: Run a fixture job locally with act**
+
+Run: `nix develop --command make act ARGS="-j fixture-lint"`
+Expected: the job ends with `🏁  Job succeeded`, and the log shows `v24.` from `node --version`. The first run pulls `catthehacker/ubuntu:act-latest`.
 
 - [ ] **Step 8: Push and watch CI**
 
@@ -1556,12 +1518,135 @@ If the token value appears in clear, STOP and report it: this is a secret-handli
 ### Task 8: `docker` workflow
 
 **Files:**
+- Create: `.github/actions/image-meta/action.yml`, `.github/actions/image-push/action.yml`
 - Create: `.github/workflows/docker.yml`, `tests/fixtures/bad-image/Makefile`, `tests/fixtures/bad-image/Dockerfile`
 - Modify: `.github/workflows/ci.yml` (add two jobs and two steps)
 
 **Interfaces:**
-- Consumes: `image-name.sh`, `docker-tags.sh` and `check-image.sh` (called from the workflow as `.metrify-workflows/scripts/<name>.sh`), plus the composites.
+- Consumes: `image-name.sh` and `docker-tags.sh` (from `image-meta`), `check-image.sh` (from `image-push`), all reached as `$GITHUB_ACTION_PATH/../../../scripts/`, plus `setup-env` and `run-make`.
+- Produces: the `image-meta` and `image-push` composites described in "Composite interfaces".
 - Produces: the public `docker.yml` with inputs `image-name` and `push`, and outputs `image`, `tags` and `digest` (spec §5.2).
+
+- [ ] **Step 0: Write the Docker composites.** Workflow `run:` steps cannot reach `scripts/` without a checkout, so all Docker logic lives in composites loaded through `$/`.
+
+`.github/actions/image-meta/action.yml`:
+```yaml
+name: image-meta
+description: >-
+  Internal to metrify-workflows, not a public interface. Computes the GHCR image name, the
+  reference to build and the tags to push, from the calling repository and event.
+
+inputs:
+  image-name:
+    description: Image name under ghcr.io/<owner>/. Empty means the repository name.
+    default: ""
+  push:
+    description: auto, always or never.
+    default: auto
+
+outputs:
+  image:
+    description: Full image name, without tag.
+    value: ${{ steps.meta.outputs.image }}
+  build-ref:
+    description: Reference `make docker-build` must produce (<image>:sha-<short sha>).
+    value: ${{ steps.meta.outputs.build-ref }}
+  tag-list:
+    description: Space-separated tags to push, empty when nothing must be pushed.
+    value: ${{ steps.meta.outputs.tag-list }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute image name and tags
+      id: meta
+      shell: bash
+      env:
+        REPOSITORY: ${{ github.repository }}
+        IMAGE_NAME: ${{ inputs.image-name }}
+        EVENT: ${{ github.event_name }}
+        REF: ${{ github.ref }}
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        PUSH_MODE: ${{ inputs.push }}
+      run: |
+        scripts="$GITHUB_ACTION_PATH/../../../scripts"
+        image=$("$scripts/image-name.sh" "$REPOSITORY" "$IMAGE_NAME")
+        tags=$("$scripts/docker-tags.sh" "$EVENT" "$REF" "$SHA" "$PUSH_MODE")
+        {
+          echo "image=$image"
+          echo "build-ref=$image:sha-${SHA:0:7}"
+          echo "tag-list=${tags//$'\n'/ }"
+        } >>"$GITHUB_OUTPUT"
+```
+
+`.github/actions/image-push/action.yml`:
+```yaml
+name: image-push
+description: >-
+  Internal to metrify-workflows, not a public interface. Checks that `make docker-build`
+  produced the expected image, then tags it and pushes it to GHCR when tags are given.
+
+inputs:
+  image:
+    description: Full image name, without tag.
+    required: true
+  build-ref:
+    description: Reference `make docker-build` was asked to produce.
+    required: true
+  tag-list:
+    description: Space-separated tags to push. Empty means check only.
+    default: ""
+
+outputs:
+  tags:
+    description: Newline-separated image references that were pushed, empty if none.
+    value: ${{ steps.push.outputs.tags }}
+  digest:
+    description: Digest of the pushed image, empty if nothing was pushed.
+    value: ${{ steps.push.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the image honours $(IMAGE)
+      shell: bash
+      env:
+        BUILD_REF: ${{ inputs.build-ref }}
+      run: '"$GITHUB_ACTION_PATH/../../../scripts/check-image.sh" "$BUILD_REF"'
+
+    - name: Log in to GHCR
+      if: inputs.tag-list != ''
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - name: Tag and push
+      id: push
+      if: inputs.tag-list != ''
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        BUILD_REF: ${{ inputs.build-ref }}
+        TAG_LIST: ${{ inputs.tag-list }}
+      run: |
+        read -ra tags <<<"$TAG_LIST"
+        refs=()
+        for tag in "${tags[@]}"; do
+          docker tag "$BUILD_REF" "$IMAGE:$tag"
+          docker push "$IMAGE:$tag"
+          refs+=("$IMAGE:$tag")
+        done
+        digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$BUILD_REF" |
+          grep -m1 "^$IMAGE@" | cut -d@ -f2)
+        {
+          echo "digest=$digest"
+          echo "tags<<METRIFY_TAGS"
+          printf '%s\n' "${refs[@]}"
+          echo "METRIFY_TAGS"
+        } >>"$GITHUB_OUTPUT"
+```
 
 - [ ] **Step 1: Write `.github/workflows/docker.yml`**
 
@@ -1655,43 +1740,19 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same commit as this workflow, so the composites match the ref the caller chose.
-      - name: Check out metrify-workflows
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .metrify-workflows
-          sparse-checkout: |
-            .github/actions
-            scripts
-          persist-credentials: false
-
-      - name: Hide metrify-workflows from git
-        run: echo ".metrify-workflows/" >>.git/info/exclude
-
+      # `$/` loads the composites from this library at the commit of this workflow, whatever
+      # ref the caller used (@v1, @main, a SHA). No checkout of the library is needed.
       # Before the build, so a bad tag or push mode fails fast.
       - name: Compute image name and tags
         id: meta
-        env:
-          REPOSITORY: ${{ github.repository }}
-          IMAGE_NAME: ${{ inputs.image-name }}
-          EVENT: ${{ github.event_name }}
-          REF: ${{ github.ref }}
-          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          PUSH_MODE: ${{ inputs.push }}
-        run: |
-          image=$(.metrify-workflows/scripts/image-name.sh "$REPOSITORY" "$IMAGE_NAME")
-          tags=$(.metrify-workflows/scripts/docker-tags.sh "$EVENT" "$REF" "$SHA" "$PUSH_MODE")
-          {
-            echo "image=$image"
-            echo "build-ref=$image:sha-${SHA:0:7}"
-            echo "tag-list=${tags//$'\n'/ }"
-          } >>"$GITHUB_OUTPUT"
+        uses: $/.github/actions/image-meta
+        with:
+          image-name: ${{ inputs.image-name }}
+          push: ${{ inputs.push }}
 
       - name: Set up environment
         id: env
-        uses: ./.metrify-workflows/.github/actions/setup-env
+        uses: $/.github/actions/setup-env
         with:
           working-directory: ${{ inputs.working-directory }}
           cache-scope: docker-build
@@ -1702,7 +1763,7 @@ jobs:
           cache-key-files: ${{ inputs.cache-key-files }}
 
       - name: Run make docker-build
-        uses: ./.metrify-workflows/.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: docker-build
           working-directory: ${{ inputs.working-directory }}
@@ -1710,42 +1771,13 @@ jobs:
           make-args: IMAGE=${{ steps.meta.outputs.build-ref }}
           make-env: ${{ secrets.make-env }}
 
-      - name: Check the image honours $(IMAGE)
-        env:
-          BUILD_REF: ${{ steps.meta.outputs.build-ref }}
-        run: .metrify-workflows/scripts/check-image.sh "$BUILD_REF"
-
-      - name: Log in to GHCR
-        if: steps.meta.outputs.tag-list != ''
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Tag and push
+      - name: Check, tag and push the image
         id: push
-        if: steps.meta.outputs.tag-list != ''
-        env:
-          IMAGE: ${{ steps.meta.outputs.image }}
-          BUILD_REF: ${{ steps.meta.outputs.build-ref }}
-          TAG_LIST: ${{ steps.meta.outputs.tag-list }}
-        run: |
-          read -ra tags <<<"$TAG_LIST"
-          refs=()
-          for tag in "${tags[@]}"; do
-            docker tag "$BUILD_REF" "$IMAGE:$tag"
-            docker push "$IMAGE:$tag"
-            refs+=("$IMAGE:$tag")
-          done
-          digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$BUILD_REF" |
-            grep -m1 "^$IMAGE@" | cut -d@ -f2)
-          {
-            echo "digest=$digest"
-            echo "tags<<METRIFY_TAGS"
-            printf '%s\n' "${refs[@]}"
-            echo "METRIFY_TAGS"
-          } >>"$GITHUB_OUTPUT"
+        uses: $/.github/actions/image-push
+        with:
+          image: ${{ steps.meta.outputs.image }}
+          build-ref: ${{ steps.meta.outputs.build-ref }}
+          tag-list: ${{ steps.meta.outputs.tag-list }}
 ```
 
 - [ ] **Step 2: Write the `bad-image` fixture**
@@ -1770,7 +1802,7 @@ CMD ["true"]
 ```yaml
   fixture-docker:
     name: fixture / docker
-    uses: ./.github/workflows/docker.yml
+    uses: $/.github/workflows/docker.yml
     permissions:
       contents: read
       packages: write
@@ -1801,7 +1833,7 @@ In `contract-errors`, insert these steps just before `      - name: Every case m
 
 ```yaml
       - name: Build an image that ignores $(IMAGE)
-        uses: ./.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: docker-build
           working-directory: tests/fixtures/bad-image
@@ -1810,7 +1842,10 @@ In `contract-errors`, insert these steps just before `      - name: Every case m
       - name: Check the image
         id: bad-image
         continue-on-error: true
-        run: scripts/check-image.sh ghcr.io/metrify-app/bad-image:sha-0000000
+        uses: $/.github/actions/image-push
+        with:
+          image: ghcr.io/metrify-app/bad-image
+          build-ref: ghcr.io/metrify-app/bad-image:sha-0000000
 
 ```
 
@@ -1842,19 +1877,19 @@ concurrency:
 jobs:
   lint:
     name: library / lint
-    uses: ./.github/workflows/lint.yml
+    uses: $/.github/workflows/lint.yml
     permissions:
       contents: read
 
   test:
     name: library / test
-    uses: ./.github/workflows/test.yml
+    uses: $/.github/workflows/test.yml
     permissions:
       contents: read
 
   fixture-lint:
     name: fixture / lint
-    uses: ./.github/workflows/lint.yml
+    uses: $/.github/workflows/lint.yml
     permissions:
       contents: read
     with:
@@ -1863,7 +1898,7 @@ jobs:
 
   fixture-test:
     name: fixture / test
-    uses: ./.github/workflows/test.yml
+    uses: $/.github/workflows/test.yml
     permissions:
       contents: read
     with:
@@ -1875,7 +1910,7 @@ jobs:
 
   fixture-build:
     name: fixture / build
-    uses: ./.github/workflows/build.yml
+    uses: $/.github/workflows/build.yml
     permissions:
       contents: read
     with:
@@ -1885,7 +1920,7 @@ jobs:
 
   fixture-docker:
     name: fixture / docker
-    uses: ./.github/workflows/docker.yml
+    uses: $/.github/workflows/docker.yml
     permissions:
       contents: read
       packages: write
@@ -1925,7 +1960,7 @@ jobs:
       - name: Missing rule
         id: missing-rule
         continue-on-error: true
-        uses: ./.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: missing
           working-directory: tests/fixtures/plain
@@ -1933,7 +1968,7 @@ jobs:
       - name: Malformed make-env
         id: bad-env
         continue-on-error: true
-        uses: ./.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: lint
           working-directory: tests/fixtures/plain
@@ -1942,13 +1977,13 @@ jobs:
       - name: Cache paths without key files
         id: bad-cache
         continue-on-error: true
-        uses: ./.github/actions/setup-env
+        uses: $/.github/actions/setup-env
         with:
           cache-scope: test
           cache-paths: tests/fixtures/plain/.cache
 
       - name: Build an image that ignores $(IMAGE)
-        uses: ./.github/actions/run-make
+        uses: $/.github/actions/run-make
         with:
           rule: docker-build
           working-directory: tests/fixtures/bad-image
@@ -1957,7 +1992,10 @@ jobs:
       - name: Check the image
         id: bad-image
         continue-on-error: true
-        run: scripts/check-image.sh ghcr.io/metrify-app/bad-image:sha-0000000
+        uses: $/.github/actions/image-push
+        with:
+          image: ghcr.io/metrify-app/bad-image
+          build-ref: ghcr.io/metrify-app/bad-image:sha-0000000
 
       - name: Every case must have failed
         env:
@@ -1986,7 +2024,7 @@ Expected: both commands exit with 0.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .github/workflows/docker.yml
+git add .github/actions/image-meta .github/actions/image-push .github/workflows/docker.yml
 git commit -m "feat(docker): build with make docker-build and push to GHCR"
 git add tests/fixtures/bad-image .github/workflows/ci.yml
 git commit -m "test(ci): self-test the docker workflow and the IMAGE contract"
@@ -2224,16 +2262,11 @@ built for `linux/amd64` only.
 Pass `KEY=VALUE` lines in the `make-env` secret; they are exported before `make` runs and every
 value is masked in the logs. Blank lines and lines starting with `#` are ignored.
 
-## The `.metrify-workflows/` directory
+## Runners
 
-During CI the library is checked out into `.metrify-workflows/` at the root of your workspace
-(it is ignored by git). Exclude it from tools that scan the whole tree, and from the Docker build
-context:
-
-```
-# .dockerignore
-.metrify-workflows/
-```
+The workflows load their internal actions with GitHub's self-repository syntax (`uses: $/...`),
+which needs runner 2.336.0 or newer. GitHub-hosted runners qualify; keep self-hosted runners
+(`runs-on` input) up to date.
 ```
 
 - [ ] **Step 2: Write `docs/workflows.md`**
@@ -2409,7 +2442,6 @@ CMD ["node", "index.js"]
 
 `examples/consumer/.dockerignore`:
 ```
-.metrify-workflows/
 node_modules/
 .git/
 ```
@@ -2503,8 +2535,6 @@ The workflows know nothing about your stack: each one runs a standard Makefile r
          packages: write
    ```
 
-3. Add `.metrify-workflows/` to your `.dockerignore`.
-
 ## Workflows
 
 | Workflow | Runs | Pushes to GHCR |
@@ -2530,6 +2560,7 @@ Work in the dev shell (`nix develop`, or direnv), then:
 ```sh
 make lint   # actionlint, zizmor, shellcheck
 make test   # unit tests of scripts/
+make act ARGS="-j fixture-test"   # one ci.yml job locally, in Docker (act)
 ```
 
 Pull requests also run the self-tests in `.github/workflows/ci.yml`. Design:
@@ -2551,8 +2582,8 @@ Read it before structural changes; update it when a design decision changes.
 
 - `.github/workflows/{lint,test,build,docker}.yml`: public interface (`workflow_call`).
 - `.github/workflows/{ci,release}.yml`: the library's own CI and releases.
-- `.github/actions/`: internal composites, loaded by public workflows from the same commit
-  (`job.workflow_sha`). Not a public interface.
+- `.github/actions/`: internal composites, loaded by public workflows with `uses: $/...`, which
+  resolves to this repository at the commit of the running workflow. Not a public interface.
 - `scripts/`: all non-trivial logic, each script unit-tested in `tests/unit/`.
 - `tests/fixtures/`: mini consumer repositories used by `ci.yml`.
 
@@ -2594,8 +2625,9 @@ Update docs in the same change as the behaviour they describe.
 
 ## Testing changes
 
-- Locally: `nix develop --command make lint test`.
-- In CI: open a pull request; `ci.yml` calls the workflows from the branch (`./.github/...`).
+- Locally: `nix develop --command make lint test`, then `make act ARGS="-j <job>"` to run a
+  `ci.yml` job in Docker with act (see `tests/act/run.sh` for its limits).
+- In CI: open a pull request; `ci.yml` calls the workflows from the branch (`$/.github/...`).
 - Before merging a change to a public workflow, also try it from a consumer repository by
   referencing the branch: `uses: Metrify-App/metrify-workflows/.github/workflows/test.yml@<branch>`.
 ```
