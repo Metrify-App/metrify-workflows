@@ -22,6 +22,7 @@
             actionlint
             zizmor
             shellcheck
+            act
           ];
         };
       });

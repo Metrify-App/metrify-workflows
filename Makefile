@@ -12,8 +12,12 @@ help: ## Show this help
 lint: ## Static analysis of workflows, actions and scripts
 	actionlint
 	zizmor --offline --config .github/zizmor.yml $(wildcard .github examples tests)
-	shellcheck -x $(wildcard scripts/*.sh tests/unit/*.sh)
+	shellcheck -x $(wildcard scripts/*.sh tests/unit/*.sh tests/act/*.sh)
 
 .PHONY: test
 test: ## Unit tests of the scripts
 	tests/unit/run.sh
+
+.PHONY: act
+act: ## Run ci.yml locally with act; pass act options in ARGS, e.g. ARGS="-j fixture-test"
+	tests/act/run.sh $(ARGS)
