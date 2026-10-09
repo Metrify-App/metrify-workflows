@@ -4,7 +4,7 @@
 #   act 0.2.x does not support the self-repository syntax (`uses: $/...`, nektos/act#6189).
 #   In this repository `$/` and `./` resolve to the same code, so the copy rewrites one into
 #   the other. Jobs that install Nix (library / lint, library / test) need a systemd host and
-#   are better checked with `make lint test` directly.
+#   are better checked with `make check` directly.
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)

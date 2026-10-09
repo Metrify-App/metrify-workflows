@@ -1,7 +1,7 @@
 name: ci
 
-# CI of the library itself: dogfooding (lint and test of this repository through its own
-# workflows), self-tests on fixtures, and contract error cases.
+# CI of the library itself: dogfooding (`make check` of this repository through its own
+# check.yml), self-tests on fixtures, and contract error cases.
 
 on:
   pull_request:
@@ -19,17 +19,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: library / lint
-    uses: $/.github/workflows/lint.yml
+  check:
+    name: library / check
+    uses: $/.github/workflows/check.yml
     permissions:
       contents: read
 
-  test:
-    name: library / test
-    uses: $/.github/workflows/test.yml
+  fixture-check:
+    name: fixture / check
+    uses: $/.github/workflows/check.yml
     permissions:
       contents: read
+    with:
+      working-directory: tests/fixtures/plain
+      node-version: "24"
+    secrets:
+      make-env: ${{ format('FIXTURE_TOKEN=run-{0}', github.run_id) }}
+
+  fixture-format-check:
+    name: fixture / format-check
+    uses: $/.github/workflows/format-check.yml
+    permissions:
+      contents: read
+    with:
+      working-directory: tests/fixtures/plain
+
+  fixture-typecheck:
+    name: fixture / typecheck
+    uses: $/.github/workflows/typecheck.yml
+    permissions:
+      contents: read
+    with:
+      working-directory: tests/fixtures/plain
 
   fixture-lint:
     name: fixture / lint
@@ -109,6 +130,13 @@ jobs:
           rule: missing
           working-directory: tests/fixtures/plain
 
+      - name: Missing standard verbs
+        id: missing-verbs
+        continue-on-error: true
+        uses: $/.github/actions/check-verbs
+        with:
+          working-directory: tests/fixtures/missing-verbs
+
       - name: Malformed make-env
         id: bad-env
         continue-on-error: true
@@ -144,12 +172,13 @@ jobs:
       - name: Every case must have failed
         env:
           MISSING_RULE: ${{ steps.missing-rule.outcome }}
+          MISSING_VERBS: ${{ steps.missing-verbs.outcome }}
           BAD_ENV: ${{ steps.bad-env.outcome }}
           BAD_CACHE: ${{ steps.bad-cache.outcome }}
           BAD_IMAGE: ${{ steps.bad-image.outcome }}
         run: |
           status=0
-          for case in MISSING_RULE BAD_ENV BAD_CACHE BAD_IMAGE; do
+          for case in MISSING_RULE MISSING_VERBS BAD_ENV BAD_CACHE BAD_IMAGE; do
             if [[ ${!case} == failure ]]; then
               echo "ok   $case failed as expected"
             else
