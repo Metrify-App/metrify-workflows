@@ -9,7 +9,9 @@ help: ## Show this help
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-6s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: lint
-lint: ## Static analysis of scripts
+lint: ## Static analysis of workflows, actions and scripts
+	actionlint
+	zizmor --offline --config .github/zizmor.yml $(wildcard .github examples tests)
 	shellcheck -x $(wildcard scripts/*.sh tests/unit/*.sh)
 
 .PHONY: test

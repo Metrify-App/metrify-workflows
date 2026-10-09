@@ -1,0 +1,8 @@
+# Third-party actions must be pinned by commit SHA. Metrify's own workflows are referenced by
+# their floating major tag (@v1) on purpose: that is how consumers receive fixes.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "Metrify-App/*": ref-pin
+        "*": hash-pin

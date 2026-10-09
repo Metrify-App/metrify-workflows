@@ -1,0 +1,15 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  smoke:
+    name: smoke / job.workflow_sha
+    uses: $/.github/workflows/smoke.yml
+    permissions:
+      contents: read
