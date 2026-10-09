@@ -68,7 +68,8 @@ request head on pull requests and `github.sha` otherwise. What is pushed:
 | push to another branch | nothing | `sha-<short>` | nothing |
 | any other event | nothing | `sha-<short>` | nothing |
 
-Login uses the job's `GITHUB_TOKEN`; no secret is needed. Pull requests from forks never get
+Login uses the job's `GITHUB_TOKEN`; no secret is needed. Runs are serialized per repository, ref and
+image (`concurrency`), so an older run never overwrites `latest` or `develop` with an older image. Pull requests from forks never get
 `packages: write`, so leave `push: auto` for them.
 
 ## Common errors

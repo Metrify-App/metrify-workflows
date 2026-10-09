@@ -77,6 +77,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # One run at a time per ref and image, so an older run never pushes `latest` or `develop`
+    # after a newer one. GitHub keeps only the newest pending run.
+    concurrency:
+      group: metrify-docker-${{ github.repository }}-${{ github.ref }}-${{ inputs.image-name }}
+      cancel-in-progress: false
     outputs:
       image: ${{ steps.meta.outputs.image }}
       tags: ${{ steps.push.outputs.tags }}
