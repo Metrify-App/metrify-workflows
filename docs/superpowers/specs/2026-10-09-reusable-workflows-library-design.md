@@ -162,11 +162,11 @@ cannot reach the scripts without a checkout, so all Docker logic lives in compos
 ### 4.3 `setup-env` composite
 
 - If `<working-directory>/flake.nix` exists:
-  - install upstream Nix (`DeterminateSystems/nix-installer-action` with `determinate: false`:
-    Determinate Nix logs in to FlakeHub, which needs an `id-token` permission callers would
-    have to grant);
+  - install Nix with `nixbuild/nix-quick-install-action`, the installer `cache-nix-action` is
+    designed for (a store installed by `DeterminateSystems/nix-installer-action` was restored
+    with broken hard links in CI, and Determinate Nix would also need an `id-token` permission);
   - restore and save the Nix store with `nix-community/cache-nix-action`, key based on
-    `hashFiles('<working-directory>/flake.lock')`;
+    `flake.nix` and `flake.lock` of the working directory;
   - if any `*-version` input is set, emit a `::warning::` saying it is ignored.
 - Otherwise (fallback): rely on the tools of the runner image (`ubuntu-latest`: make, Docker,
   Node, Python, Go…). For each non-empty `node-version`, `python-version`, `go-version` input,
