@@ -1,0 +1,127 @@
+name: docker
+
+# Public workflow: runs `make docker-build IMAGE=<name>`, then tags and pushes the image to
+# GHCR according to the event and the push mode.
+# Reference: docs/workflows.md. Makefile contract: docs/contract.md.
+# The calling job must grant `contents: read` and `packages: write`.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory that contains the Makefile.
+        type: string
+        default: .
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+      timeout-minutes:
+        description: Job timeout in minutes.
+        type: number
+        default: 30
+      node-version:
+        description: Fallback only (no flake.nix). Node.js version to install.
+        type: string
+        default: ""
+      python-version:
+        description: Fallback only (no flake.nix). Python version to install.
+        type: string
+        default: ""
+      go-version:
+        description: Fallback only (no flake.nix). Go version to install.
+        type: string
+        default: ""
+      cache-paths:
+        description: Extra paths to cache, one per line. Requires cache-key-files.
+        type: string
+        default: ""
+      cache-key-files:
+        description: Glob, relative to the repository root, hashed into the cache key.
+        type: string
+        default: ""
+      image-name:
+        description: Image name under ghcr.io/<owner>/. Defaults to the repository name.
+        type: string
+        default: ""
+      push:
+        description: "auto (push depends on the event), always or never."
+        type: string
+        default: auto
+    secrets:
+      make-env:
+        description: KEY=VALUE lines exported (masked) before make runs.
+        required: false
+    outputs:
+      image:
+        description: Full image name, without tag.
+        value: ${{ jobs.docker.outputs.image }}
+      tags:
+        description: Newline-separated image references that were pushed, empty if none.
+        value: ${{ jobs.docker.outputs.tags }}
+      digest:
+        description: Digest of the pushed image, empty if nothing was pushed.
+        value: ${{ jobs.docker.outputs.digest }}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  docker:
+    name: make docker-build
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tags: ${{ steps.push.outputs.tags }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `$/` loads the composites from this library at the commit of this workflow, whatever
+      # ref the caller used (@v1, @main, a SHA). No checkout of the library is needed.
+      # Before the build, so a bad tag or push mode fails fast.
+      - name: Compute image name and tags
+        id: meta
+        uses: $/.github/actions/image-meta
+        with:
+          image-name: ${{ inputs.image-name }}
+          push: ${{ inputs.push }}
+
+      - name: Set up environment
+        id: env
+        uses: $/.github/actions/setup-env
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          cache-scope: docker-build
+          node-version: ${{ inputs.node-version }}
+          python-version: ${{ inputs.python-version }}
+          go-version: ${{ inputs.go-version }}
+          cache-paths: ${{ inputs.cache-paths }}
+          cache-key-files: ${{ inputs.cache-key-files }}
+
+      - name: Run make docker-build
+        uses: $/.github/actions/run-make
+        with:
+          rule: docker-build
+          working-directory: ${{ inputs.working-directory }}
+          use-nix: ${{ steps.env.outputs.use-nix }}
+          make-args: IMAGE=${{ steps.meta.outputs.build-ref }}
+          make-env: ${{ secrets.make-env }}
+
+      - name: Check, tag and push the image
+        id: push
+        uses: $/.github/actions/image-push
+        with:
+          image: ${{ steps.meta.outputs.image }}
+          build-ref: ${{ steps.meta.outputs.build-ref }}
+          tag-list: ${{ steps.meta.outputs.tag-list }}
