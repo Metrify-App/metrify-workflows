@@ -18,6 +18,15 @@ Success criteria:
   handles registries, tokens and tags.
 - The library is versioned (`vX.Y.Z` plus a floating major `vX`) and tests itself.
 
+Prerequisites:
+
+- **The repository is public.** Public workflows check out the library itself (section 4.2).
+  A consumer's `GITHUB_TOKEN` can only read its own repository, so that checkout fails when the
+  library is private. The library contains no secret and no business code.
+- The older private repository `Metrify-App/github-workflows` (`docker-build-push.yml`,
+  repository mirroring) is replaced by this library over time. Migrating its consumers, its
+  mirroring workflows and archiving it are out of scope here.
+
 ## 2. Decisions summary
 
 | Topic | Decision |
@@ -34,7 +43,8 @@ Success criteria:
 | Make secrets | One optional multi-line secret `make-env` (`KEY=VALUE` lines) |
 | Library releases | release-please, `CHANGELOG.md`, floating major tag `vX` |
 | Recommended consumer ref | `@v1` |
-| Library tests | actionlint + zizmor + shellcheck, unit tests for tag logic, self-tests on fixtures |
+| Library tests | actionlint + zizmor + shellcheck, unit tests for every script, self-tests (dogfooding + fixtures) |
+| Dependency caches | Only through `cache-paths` / `cache-key-files`; built-in `setup-*` caches are disabled |
 | Docs | All in this repository, in English |
 
 ## 3. Makefile contract
@@ -70,6 +80,11 @@ Rules:
   ```
 
 - Makefiles never log in to a registry, push, or handle tokens.
+- A repository with a `flake.nix` runs `nix develop --command make <rule>` in CI, so its
+  devShell must provide `gnumake`.
+- The library is checked out into `.metrify-workflows/` inside the workspace during CI
+  (section 4.2). Consumers exclude that directory from their linters and from the Docker build
+  context (`.dockerignore`).
 
 ## 4. Architecture
 
@@ -87,15 +102,21 @@ Rules:
   actions/
     setup-env/action.yml  # internal: Nix or fallback toolchain, caches
     run-make/action.yml   # internal: exports make-env, checks the rule, runs make
+  actionlint.yaml         # ignores job.workflow_* until actionlint knows them
   dependabot.yml          # keeps pinned action SHAs up to date
 scripts/
+  image-name.sh         # ghcr.io/<lowercase owner>/<image name>
   docker-tags.sh        # computes image tags from the event and the push mode
+  export-make-env.sh    # validates, masks and exports make-env lines
+  run-make.sh           # checks the rule exists, then runs make (optionally in nix develop)
+  check-image.sh        # fails with a contract error when $(IMAGE) was not built
 tests/
-  unit/docker-tags.sh   # unit tests for scripts/docker-tags.sh
+  unit/                 # one plain-bash test file per script, plus a tiny assert library
   fixtures/
     plain/              # Makefile + Dockerfile, no flake (fallback path)
-    nix/                # minimal flake.nix + Makefile (Nix path)
     bad-image/          # docker-build ignores $(IMAGE) (negative test)
+flake.nix, flake.lock   # dev shell of the library itself (actionlint, zizmor, shellcheck, make)
+Makefile                # `make lint` and `make test` for the library itself
 examples/consumer/
   Makefile
   Dockerfile
@@ -108,8 +129,13 @@ README.md
 CHANGELOG.md            # maintained by release-please
 release-please-config.json
 .release-please-manifest.json
+version.txt             # maintained by release-please (simple release type)
 CLAUDE.md
 ```
+
+The library dogfoods its own contract: it has a `flake.nix` and a `Makefile`, and `ci.yml`
+calls `lint.yml` and `test.yml` on the repository root. This is also the self-test of the Nix
+path, so there is no separate Nix fixture.
 
 ### 4.2 Flow of a public workflow
 
@@ -133,24 +159,31 @@ login and push steps (section 6).
 ### 4.3 `setup-env` composite
 
 - If `<working-directory>/flake.nix` exists:
-  - install Nix (`DeterminateSystems/nix-installer-action`);
+  - install upstream Nix (`DeterminateSystems/nix-installer-action` with `determinate: false`:
+    Determinate Nix logs in to FlakeHub, which needs an `id-token` permission callers would
+    have to grant);
   - restore and save the Nix store with `nix-community/cache-nix-action`, key based on
     `hashFiles('<working-directory>/flake.lock')`;
   - if any `*-version` input is set, emit a `::warning::` saying it is ignored.
 - Otherwise (fallback): rely on the tools of the runner image (`ubuntu-latest`: make, Docker,
   Node, Python, Go…). For each non-empty `node-version`, `python-version`, `go-version` input,
-  call the matching `actions/setup-*` action with its built-in dependency cache enabled.
+  call the matching `actions/setup-*` action with its built-in dependency cache **disabled**
+  (those caches look for lock files at the repository root and fail or warn in monorepos, so
+  caching stays explicit and uniform).
 - In both cases, if `cache-paths` is set, use `actions/cache` with those paths and a key built
-  from the OS, the rule and `hashFiles(cache-key-files)`.
+  from the OS, the rule and `hashFiles(cache-key-files)`. `cache-key-files` is one glob,
+  relative to the repository root (not to `working-directory`).
 
 ### 4.4 `run-make` composite
 
-1. If the `make-env` secret is set, parse it line by line. Each line must be `KEY=VALUE`
-   (blank lines and lines starting with `#` are skipped). Each value is masked with
-   `::add-mask::` and appended to `$GITHUB_ENV`. A malformed line fails the step without
-   printing its value.
-2. Check the rule exists with `make -n <rule>`; on failure, emit an `::error::` annotation that
-   names the rule and points to `docs/contract.md`.
+1. If the `make-env` secret is set, `scripts/export-make-env.sh` parses it line by line. Each
+   line must be `KEY=VALUE` with `KEY` matching `^[A-Za-z_][A-Za-z0-9_]*$` (blank lines and lines
+   starting with `#` are skipped). Each non-empty value is masked with `::add-mask::` (with `%`,
+   `\r` and `\n` escaped) and, once every line is valid, all pairs are appended to
+   `$GITHUB_ENV`. A malformed line fails the step, naming its line number but never its value.
+2. `scripts/run-make.sh` checks the rule exists with `make -n <rule>`. When make reports
+   `No rule to make target '<rule>'`, it emits an `::error::` annotation that names the rule and
+   points to `docs/contract.md`. Any other dry-run failure is left to the real run to report.
 3. Run `nix develop --command make <rule> <extra vars>` when a flake is present, otherwise
    `make <rule> <extra vars>`, in `working-directory`. `docker.yml` passes `IMAGE=...` as an
    extra variable.
@@ -200,7 +233,9 @@ cannot get more permissions than its caller. Login uses `GITHUB_TOKEN`; no secre
 ## 6. Docker tagging and push
 
 The build always uses `IMAGE=ghcr.io/<owner>/<image-name>:sha-<short sha>` (7 characters,
-owner lowercased because GHCR requires lowercase names). After `make docker-build`, the workflow
+owner and image name lowercased because GHCR requires lowercase names). The commit is
+`github.event.pull_request.head.sha` on pull requests (the commit the author pushed, not the
+temporary merge commit) and `github.sha` otherwise. After `make docker-build`, the workflow
 runs `docker image inspect "$IMAGE"`; if the image is missing, it fails with an annotation
 explaining the `$(IMAGE)` contract.
 
@@ -227,15 +262,17 @@ explaining the `$(IMAGE)` contract.
 
 Runs on pull requests and on pushes to `main`.
 
-- **Static analysis:** `actionlint` (syntax and expressions), `zizmor` (injection, permissions,
-  unpinned actions), `shellcheck` on `scripts/` and `tests/`.
-- **Unit tests:** `tests/unit/docker-tags.sh`, plain bash with no dependency, covers every row of
+- **Static analysis** (`make lint`): `actionlint` (syntax and expressions), `zizmor` on explicit
+  paths (`.github examples tests`, never the `.metrify-workflows/` checkout), `shellcheck` on
+  `scripts/` and `tests/`. actionlint does not know `job.workflow_repository` and
+  `job.workflow_sha` yet, so `.github/actionlint.yaml` ignores exactly those two errors.
+- **Unit tests** (`make test`): plain bash, no dependency besides `make`. They cover every row of
   the table in section 6, the `always`/`never` modes, a malformed release tag, an unknown push
-  mode and an uppercase owner.
-- **Self-tests:** jobs call the public workflows locally (`uses: ./.github/workflows/<name>.yml`)
-  on fixtures:
+  mode, an uppercase owner, every `make-env` rule (including a value with `%`), the missing-rule
+  annotation and the missing-image annotation.
+- **Self-tests:** jobs call the public workflows locally (`uses: ./.github/workflows/<name>.yml`):
+  - `lint` and `test` on the repository root (dogfooding, Nix path and Nix cache);
   - `lint`, `test`, `build` on `tests/fixtures/plain` with `node-version` set (fallback path);
-  - `test` on `tests/fixtures/nix` (Nix path and Nix cache);
   - `docker` on `tests/fixtures/plain` with `push: never`.
 - **Negative tests:** jobs that call a reusable workflow cannot use `continue-on-error`, so
   failure cases call the composites directly in a step with `continue-on-error: true`, then
@@ -252,8 +289,8 @@ Runs on pull requests and on pushes to `main`.
 - `release.yml` runs `googleapis/release-please-action` (`release-type: simple`) on pushes to
   `main`. It keeps a release pull request open that updates `CHANGELOG.md` and the manifest.
 - Merging the release pull request creates the `vX.Y.Z` tag and the GitHub Release. A following
-  job in the same workflow then moves the floating major tag:
-  `git tag -f vX <sha> && git push -f origin vX`.
+  job in the same workflow then moves the floating major tag `vX` to the release commit through
+  the GitHub API (`gh api`), so no credentials are persisted in a checkout.
 - The first release is forced to `1.0.0` (`release-as` in the config, removed afterwards).
 - A breaking change (`feat!:` or a `BREAKING CHANGE:` footer) produces the next major (`v2`).
   The previous major is frozen: no backport branch for now.
@@ -310,5 +347,6 @@ jobs:
 - Backports to a previous major version.
 - Cachix or any external binary cache.
 - Deployment workflows.
+- Migrating consumers and mirroring workflows from `Metrify-App/github-workflows`.
 - Toolchains other than Node, Python and Go in the fallback path (added when a consumer needs
   them, as a non-breaking new input).
