@@ -8,21 +8,11 @@ The workflows know nothing about your stack: each one runs a standard Makefile r
 
 ## Quick start
 
-1. Give your repository a `Makefile` with the rules you need
-   (see [docs/contract.md](docs/contract.md) and [examples/consumer/](examples/consumer/)):
-
-   ```make
-   IMAGE ?= my-service:dev
-
-   install:
-   	npm ci
-   lint: install
-   	npm run lint
-   test: install
-   	npm test
-   docker-build:
-   	docker build -t $(IMAGE) .
-   ```
+1. Give your repository the Metrify make verbs (`help`, `install`, `dev`, `format`,
+   `format-check`, `lint`, `typecheck`, `test`, `fix`, `check`), plus `docker-build` if it ships
+   an image. Repositories created from
+   [metrify-template](https://github.com/Metrify-App/metrify-template) already have them; see
+   [docs/contract.md](docs/contract.md) and [examples/consumer/Makefile](examples/consumer/Makefile).
 
 2. Add `.github/workflows/ci.yml`:
 
@@ -35,16 +25,12 @@ The workflows know nothing about your stack: each one runs a standard Makefile r
        tags: ["v*.*.*"]
    permissions: {}
    jobs:
-     lint:
-       uses: Metrify-App/metrify-workflows/.github/workflows/lint.yml@v1
-       permissions:
-         contents: read
-     test:
-       uses: Metrify-App/metrify-workflows/.github/workflows/test.yml@v1
+     check:
+       uses: Metrify-App/metrify-workflows/.github/workflows/check.yml@v1
        permissions:
          contents: read
      docker:
-       needs: [lint, test]
+       needs: check
        uses: Metrify-App/metrify-workflows/.github/workflows/docker.yml@v1
        permissions:
          contents: read
@@ -53,15 +39,20 @@ The workflows know nothing about your stack: each one runs a standard Makefile r
 
 ## Workflows
 
+Each one runs `make install`, then its verb.
+
 | Workflow | Runs | Pushes to GHCR |
 |----------|------|----------------|
+| `check.yml` | standard verbs check, then `make check` (the default) | no |
+| `format-check.yml` | `make format-check` | no |
 | `lint.yml` | `make lint` | no |
+| `typecheck.yml` | `make typecheck` | no |
 | `test.yml` | `make test` | no |
-| `build.yml` | `make build` | no |
-| `docker.yml` | `make docker-build IMAGE=...` | `sha-<commit>`, plus `latest` on `main`, `develop` on `develop`, `vX.Y.Z` on release tags |
+| `build.yml` | `make build` (optional verb) | no |
+| `docker.yml` | `make docker-build IMAGE=...` (optional verb) | `sha-<commit>`, plus `latest` on `main`, `develop` on `develop`, `vX.Y.Z` on release tags |
 
 Inputs, outputs, permissions and errors: [docs/workflows.md](docs/workflows.md).
-Repositories with a `flake.nix` run their rules inside `nix develop`; the others use the tools
+Repositories with a `flake.nix` run their verbs inside `nix develop`; the others use the tools
 of the GitHub runner, with optional `node-version`, `python-version` and `go-version` inputs.
 
 ## Versions
@@ -74,8 +65,7 @@ immediately. See [docs/releasing.md](docs/releasing.md) and [CHANGELOG.md](CHANG
 Work in the dev shell (`nix develop`, or direnv), then:
 
 ```sh
-make lint   # actionlint, zizmor, shellcheck
-make test   # unit tests of scripts/
+make check  # format-check, lint (actionlint, zizmor, shellcheck), typecheck, test
 make act ARGS="-j fixture-test"   # one ci.yml job locally, in Docker (act)
 ```
 
