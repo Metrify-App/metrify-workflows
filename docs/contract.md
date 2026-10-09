@@ -22,8 +22,10 @@ Every Metrify repository has these targets. A verb with nothing to do for the st
 | `fix` | `format` + autofixable lint. | none |
 | `check` | `format-check lint typecheck test`: everything the CI runs. | `check.yml` |
 
-`check.yml` first reads the Makefile's rule database (no recipe runs) and fails when a verb is
-missing:
+After `make install`, `check.yml` reads the Makefile's rule database (`make -pRrq`: no verb recipe
+runs, though make still parses the Makefile and may regenerate included makefiles) and fails
+when a verb has no rule, even if `.PHONY` lists it. Only explicit targets count, not `%` pattern
+rules:
 
 ```
 The Makefile lacks the standard verbs: typecheck fix. Every Metrify repo has help install dev format format-check lint typecheck test fix check.

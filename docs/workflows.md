@@ -82,6 +82,8 @@ image (`concurrency`), so an older run never overwrites `latest` or `develop` wi
 | Message | Cause | Fix |
 |---------|-------|-----|
 | `The Makefile lacks the standard verbs: <verbs>` | `check.yml` found standard verbs missing. | Add them; a verb with nothing to do prints `<verb>: nothing to do`. |
+| `make could not read the Makefile: <message>` | `check.yml` could not parse the Makefile (an `$(error)`, a missing include, a failing `nix develop`). | Fix what make reports; `make-env` and `make install` already ran at that point. |
+| `The Makefile has no 'install' rule` | Every workflow runs `make install` first. | Add `install` (`@echo "install: nothing to do"` if there is nothing to install). |
 | `The Makefile has no '<rule>' rule` | The workflow is called but the rule does not exist. | Add the rule, or remove the job. |
 | `make docker-build did not produce '<image>'` | `docker-build` does not tag with `$(IMAGE)`. | Use `docker build -t $(IMAGE) .`. |
 | `Git tag '<tag>' is not a release tag (expected vX.Y.Z)` | A pushed tag triggered the workflow. | Restrict the trigger to `tags: ["v*.*.*"]` or use `push: never`. |
