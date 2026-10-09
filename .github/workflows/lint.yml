@@ -1,0 +1,85 @@
+name: lint
+
+# Public workflow: runs `make lint` (style and code quality) in the calling repository.
+# Reference: docs/workflows.md. Makefile contract: docs/contract.md.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory that contains the Makefile.
+        type: string
+        default: .
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+      timeout-minutes:
+        description: Job timeout in minutes.
+        type: number
+        default: 30
+      node-version:
+        description: Fallback only (no flake.nix). Node.js version to install.
+        type: string
+        default: ""
+      python-version:
+        description: Fallback only (no flake.nix). Python version to install.
+        type: string
+        default: ""
+      go-version:
+        description: Fallback only (no flake.nix). Go version to install.
+        type: string
+        default: ""
+      cache-paths:
+        description: Extra paths to cache, one per line. Requires cache-key-files.
+        type: string
+        default: ""
+      cache-key-files:
+        description: Glob, relative to the repository root, hashed into the cache key.
+        type: string
+        default: ""
+    secrets:
+      make-env:
+        description: KEY=VALUE lines exported (masked) before make runs.
+        required: false
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: make lint
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `$/` loads the composites from this library at the commit of this workflow, whatever
+      # ref the caller used (@v1, @main, a SHA). No checkout of the library is needed.
+      - name: Set up environment
+        id: env
+        uses: $/.github/actions/setup-env
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          cache-scope: lint
+          node-version: ${{ inputs.node-version }}
+          python-version: ${{ inputs.python-version }}
+          go-version: ${{ inputs.go-version }}
+          cache-paths: ${{ inputs.cache-paths }}
+          cache-key-files: ${{ inputs.cache-key-files }}
+
+      - name: Run make lint
+        uses: $/.github/actions/run-make
+        with:
+          rule: lint
+          working-directory: ${{ inputs.working-directory }}
+          use-nix: ${{ steps.env.outputs.use-nix }}
+          make-env: ${{ secrets.make-env }}
