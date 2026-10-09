@@ -1,9 +1,8 @@
-name: docker
+name: format-check
 
-# Public workflow: runs `make install` and `make docker-build IMAGE=<name>`, then tags and
-# pushes the image to GHCR according to the event and the push mode.
+# Public workflow: runs `make install`, then `make format-check` (formatting check),
+# in the calling repository.
 # Reference: docs/workflows.md. Makefile contract: docs/contract.md.
-# The calling job must grant `contents: read` and `packages: write`.
 
 on:
   workflow_call:
@@ -40,28 +39,10 @@ on:
         description: Glob, relative to the repository root, hashed into the cache key.
         type: string
         default: ""
-      image-name:
-        description: Image name under ghcr.io/<owner>/. Defaults to the repository name.
-        type: string
-        default: ""
-      push:
-        description: "auto (push depends on the event), always or never."
-        type: string
-        default: auto
     secrets:
       make-env:
         description: KEY=VALUE lines exported (masked) before make runs.
         required: false
-    outputs:
-      image:
-        description: Full image name, without tag.
-        value: ${{ jobs.docker.outputs.image }}
-      tags:
-        description: Newline-separated image references that were pushed, empty if none.
-        value: ${{ jobs.docker.outputs.tags }}
-      digest:
-        description: Digest of the pushed image, empty if nothing was pushed.
-        value: ${{ jobs.docker.outputs.digest }}
 
 permissions: {}
 
@@ -70,22 +51,12 @@ defaults:
     shell: bash
 
 jobs:
-  docker:
-    name: make docker-build
+  format-check:
+    name: make format-check
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
-      packages: write
-    # One run at a time per ref and image, so an older run never pushes `latest` or `develop`
-    # after a newer one. GitHub keeps only the newest pending run.
-    concurrency:
-      group: metrify-docker-${{ github.repository }}-${{ github.ref }}-${{ inputs.image-name }}
-      cancel-in-progress: false
-    outputs:
-      image: ${{ steps.meta.outputs.image }}
-      tags: ${{ steps.push.outputs.tags }}
-      digest: ${{ steps.push.outputs.digest }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,39 +65,22 @@ jobs:
 
       # `$/` loads the composites from this library at the commit of this workflow, whatever
       # ref the caller used (@v1, @main, a SHA). No checkout of the library is needed.
-      # Before the build, so a bad tag or push mode fails fast.
-      - name: Compute image name and tags
-        id: meta
-        uses: $/.github/actions/image-meta
-        with:
-          image-name: ${{ inputs.image-name }}
-          push: ${{ inputs.push }}
-
       - name: Set up environment
         id: env
         uses: $/.github/actions/setup-env
         with:
           working-directory: ${{ inputs.working-directory }}
-          cache-scope: docker-build
+          cache-scope: format-check
           node-version: ${{ inputs.node-version }}
           python-version: ${{ inputs.python-version }}
           go-version: ${{ inputs.go-version }}
           cache-paths: ${{ inputs.cache-paths }}
           cache-key-files: ${{ inputs.cache-key-files }}
 
-      - name: Run make docker-build
+      - name: Run make format-check
         uses: $/.github/actions/run-make
         with:
-          rule: docker-build
+          rule: format-check
           working-directory: ${{ inputs.working-directory }}
           use-nix: ${{ steps.env.outputs.use-nix }}
-          make-args: IMAGE=${{ steps.meta.outputs.build-ref }}
           make-env: ${{ secrets.make-env }}
-
-      - name: Check, tag and push the image
-        id: push
-        uses: $/.github/actions/image-push
-        with:
-          image: ${{ steps.meta.outputs.image }}
-          build-ref: ${{ steps.meta.outputs.build-ref }}
-          tag-list: ${{ steps.meta.outputs.tag-list }}

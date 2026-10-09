@@ -1,6 +1,7 @@
 name: test
 
-# Public workflow: runs `make test` (the tests) in the calling repository.
+# Public workflow: runs `make install`, then `make test` (the tests),
+# in the calling repository.
 # Reference: docs/workflows.md. Makefile contract: docs/contract.md.
 
 on:
