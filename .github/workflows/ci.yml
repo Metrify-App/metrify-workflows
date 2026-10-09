@@ -133,9 +133,11 @@ jobs:
       - name: Missing standard verbs
         id: missing-verbs
         continue-on-error: true
-        uses: $/.github/actions/check-verbs
+        uses: $/.github/actions/run-make
         with:
+          rule: check
           working-directory: tests/fixtures/missing-verbs
+          check-verbs: "true"
 
       - name: Malformed make-env
         id: bad-env
