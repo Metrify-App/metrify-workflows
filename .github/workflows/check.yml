@@ -78,16 +78,11 @@ jobs:
           cache-paths: ${{ inputs.cache-paths }}
           cache-key-files: ${{ inputs.cache-key-files }}
 
-      - name: Check the standard make verbs
-        uses: $/.github/actions/check-verbs
-        with:
-          working-directory: ${{ inputs.working-directory }}
-          use-nix: ${{ steps.env.outputs.use-nix }}
-
       - name: Run make check
         uses: $/.github/actions/run-make
         with:
           rule: check
+          check-verbs: "true"
           working-directory: ${{ inputs.working-directory }}
           use-nix: ${{ steps.env.outputs.use-nix }}
           make-env: ${{ secrets.make-env }}
