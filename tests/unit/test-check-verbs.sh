@@ -40,6 +40,27 @@ assert_status 1 "fails when verbs are missing"
 assert_contains "::error::The Makefile lacks the standard verbs: typecheck fix" "names every missing verb, variables do not count"
 assert_contains "docs/contract.md" "points to the contract"
 
+# A verb listed in .PHONY but without a rule is still missing (the template lists all of them).
+cat >Makefile <<'MAKEFILE'
+.PHONY: help install dev format format-check lint typecheck test fix check
+help install dev format format-check lint test fix:
+	@echo "$@: nothing to do"
+check: format-check lint typecheck test
+MAKEFILE
+run "$script"
+assert_status 1 "fails when a verb is only declared phony"
+assert_contains "lacks the standard verbs: typecheck." "does not count a .PHONY entry as a rule"
+
+# A Makefile make cannot read is reported as such, not as missing verbs.
+cat >Makefile <<'MAKEFILE'
+$(error boom from the Makefile)
+MAKEFILE
+run "$script"
+assert_status 1 "fails when make cannot read the Makefile"
+assert_contains "::error::make could not read the Makefile" "reports a read failure"
+assert_contains "boom from the Makefile" "shows make's message"
+assert_not_contains "lacks the standard verbs" "does not blame the verbs on a read failure"
+
 rm Makefile
 run "$script"
 assert_status 1 "fails without a Makefile"
