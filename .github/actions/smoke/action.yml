@@ -1,0 +1,14 @@
+name: smoke
+description: Temporary (removed in Task 7). Shows where a composite loaded through `$/` lives.
+runs:
+  using: composite
+  steps:
+    - name: Show the composite location
+      shell: bash
+      run: |
+        root="$GITHUB_ACTION_PATH/../../.."
+        echo "action path: $GITHUB_ACTION_PATH"
+        ls -la "$root"
+        test -f "$root/flake.nix"
+        test -f "$root/tests/unit/lib.sh"
+        echo "ok: the composite comes with the whole metrify-workflows tree"
