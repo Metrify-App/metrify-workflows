@@ -62,6 +62,33 @@ jobs:
       python-version: "3.14"
       go-version: "1.26"
 
+  fixture-docker:
+    name: fixture / docker
+    uses: $/.github/workflows/docker.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      working-directory: tests/fixtures/plain
+      image-name: metrify-workflows-fixture
+      push: never
+
+  fixture-docker-outputs:
+    name: fixture / docker outputs
+    needs: fixture-docker
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check the outputs of a build-only run
+        env:
+          IMAGE: ${{ needs.fixture-docker.outputs.image }}
+          TAGS: ${{ needs.fixture-docker.outputs.tags }}
+          DIGEST: ${{ needs.fixture-docker.outputs.digest }}
+        run: |
+          test "$IMAGE" = "ghcr.io/metrify-app/metrify-workflows-fixture"
+          test -z "$TAGS"
+          test -z "$DIGEST"
+
   contract-errors:
     name: contract errors
     runs-on: ubuntu-latest
@@ -99,14 +126,30 @@ jobs:
           cache-scope: test
           cache-paths: tests/fixtures/plain/.cache
 
+      - name: Build an image that ignores $(IMAGE)
+        uses: $/.github/actions/run-make
+        with:
+          rule: docker-build
+          working-directory: tests/fixtures/bad-image
+          make-args: IMAGE=ghcr.io/metrify-app/bad-image:sha-0000000
+
+      - name: Check the image
+        id: bad-image
+        continue-on-error: true
+        uses: $/.github/actions/image-push
+        with:
+          image: ghcr.io/metrify-app/bad-image
+          build-ref: ghcr.io/metrify-app/bad-image:sha-0000000
+
       - name: Every case must have failed
         env:
           MISSING_RULE: ${{ steps.missing-rule.outcome }}
           BAD_ENV: ${{ steps.bad-env.outcome }}
           BAD_CACHE: ${{ steps.bad-cache.outcome }}
+          BAD_IMAGE: ${{ steps.bad-image.outcome }}
         run: |
           status=0
-          for case in MISSING_RULE BAD_ENV BAD_CACHE; do
+          for case in MISSING_RULE BAD_ENV BAD_CACHE BAD_IMAGE; do
             if [[ ${!case} == failure ]]; then
               echo "ok   $case failed as expected"
             else
