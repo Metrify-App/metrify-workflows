@@ -1,14 +1,16 @@
 # CLAUDE.md
 
-Reusable GitHub Actions workflows for Metrify repositories. Each public workflow runs one
-Makefile rule of the calling repository; the library never knows consumer stacks.
+Reusable GitHub Actions workflows for Metrify repositories. Each public workflow runs `make install`
+then one make verb of the calling repository; the library never knows consumer stacks. The verbs
+are those of the Metrify standard (`metrify-template`, `STANDARD.md`): change them there first.
 
 The design reference is `docs/superpowers/specs/2026-10-09-reusable-workflows-library-design.md`.
 Read it before structural changes; update it when a design decision changes.
 
 ## Layout
 
-- `.github/workflows/{lint,test,build,docker}.yml`: public interface (`workflow_call`).
+- `.github/workflows/{check,format-check,lint,typecheck,test,build,docker}.yml`: public interface
+  (`workflow_call`).
 - `.github/workflows/{ci,release}.yml`: the library's own CI and releases.
 - `.github/actions/`: internal composites, loaded by public workflows with `uses: $/...`, which
   resolves to this repository at the commit of the running workflow. Not a public interface.
@@ -20,7 +22,7 @@ Read it before structural changes; update it when a design decision changes.
 | Document | Update when |
 |----------|-------------|
 | `README.md` | the list of workflows or the quick start changes |
-| `docs/contract.md` | the Makefile contract changes |
+| `docs/contract.md` | the make verbs or the Makefile contract change (keep in sync with `metrify-template`) |
 | `docs/workflows.md` | an input, output, secret, permission, tag rule or error message changes |
 | `docs/releasing.md` | the release process or the breaking-change policy changes |
 | `examples/consumer/` | the recommended consumer setup changes |
@@ -39,8 +41,8 @@ Update docs in the same change as the behaviour they describe.
 - **Least privilege:** `permissions: {}` at workflow level, minimal permissions per job,
   `persist-credentials: false` on checkouts, untrusted values passed through `env:`, never
   interpolated in `run:`.
-- **Micro commits:** one self-contained step per commit; `make lint` and `make test` pass at
-  every commit.
+- **Micro commits:** one self-contained step per commit; `make check` passes at every
+  commit.
 
 ## Git workflow
 
@@ -53,7 +55,7 @@ Update docs in the same change as the behaviour they describe.
 
 ## Testing changes
 
-- Locally: `nix develop --command make lint test`, then `make act ARGS="-j <job>"` to run a
+- Locally: `nix develop --command make check`, then `make act ARGS="-j <job>"` to run a
   `ci.yml` job in Docker with act (see `tests/act/run.sh` for its limits).
 - In CI: open a pull request; `ci.yml` calls the workflows from the branch (`$/.github/...`).
 - Before merging a change to a public workflow, also try it from a consumer repository by
