@@ -1,40 +1,53 @@
 # Makefile contract
 
-The library never knows a repository's stack. Its workflows only run standard Makefile rules;
-each repository decides what those rules do.
+The library never knows a repository's stack. Its workflows only run the make verbs of the
+Metrify repo standard; each repository decides what those verbs do. The standard is defined in
+[metrify-template](https://github.com/Metrify-App/metrify-template/blob/main/.claude/skills/metrify-sync/STANDARD.md)
+("Make verbs"); this page restates what the workflows rely on.
 
-## Rules
+## Standard verbs
 
-| Rule | Workflow | What it must do |
-|------|----------|-----------------|
-| `lint` | `lint.yml` | Check style and code quality. Exit non-zero on problems. |
-| `test` | `test.yml` | Run the tests. |
-| `build` | `build.yml` | Compile the project. |
-| `docker-build` | `docker.yml` | Build the image and tag it with `$(IMAGE)`. Never push. |
-| `install` | none | Install dependencies. Other rules depend on it when they need it. |
+Every Metrify repository has these targets. A verb with nothing to do for the stack prints
+`<verb>: nothing to do` and exits 0.
 
-A repository that has no use for a rule does not implement it and does not call the matching
-workflow. Calling a workflow whose rule is missing fails with:
+| Verb | Does | Workflow |
+|------|------|----------|
+| `help` | Lists targets (default goal). | none |
+| `install` | Installs dependencies. | run first by every workflow |
+| `dev` | Runs the project locally. | none |
+| `format` / `format-check` | Formats / checks formatting. | `format-check.yml` |
+| `lint` | Lints. | `lint.yml` |
+| `typecheck` | Type checks. | `typecheck.yml` |
+| `test` | Runs the tests. | `test.yml` |
+| `fix` | `format` + autofixable lint. | none |
+| `check` | `format-check lint typecheck test`: everything the CI runs. | `check.yml` |
+
+`check.yml` first reads the Makefile's rule database (no recipe runs) and fails when a verb is
+missing:
+
+```
+The Makefile lacks the standard verbs: typecheck fix. Every Metrify repo has help install dev format format-check lint typecheck test fix check.
+```
+
+## Optional verbs
+
+Only for repositories that ship a binary or an image:
+
+| Verb | Does | Workflow |
+|------|------|----------|
+| `build` | Compiles the project. | `build.yml` |
+| `docker-build` | Builds the image tagged `$(IMAGE)`. Never pushes. | `docker.yml` |
+
+Calling a workflow whose verb is missing fails with:
 
 ```
 The Makefile has no 'build' rule. Add it, or stop calling the build workflow.
 ```
 
-## Dependencies between rules
+## `make install` first
 
-Each workflow runs on a fresh runner and calls exactly one rule. Express what a rule needs as
-Make prerequisites, so CI and local runs behave the same:
-
-```make
-install:
-	npm ci
-
-lint: install
-	npm run lint
-
-test: install
-	npm test
-```
+Each workflow runs on a fresh runner: it runs `make install`, then its verb, in the same job.
+No Make prerequisite on `install` is needed (it would run twice).
 
 ## Docker images
 

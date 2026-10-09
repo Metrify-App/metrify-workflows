@@ -1,28 +1,33 @@
 # Workflows reference
 
-Every workflow runs one Makefile rule (see [contract.md](contract.md)) in a single job:
+Every workflow runs `make install`, then one make verb (see [contract.md](contract.md)), in a
+single job. Use `check.yml` by default; the single-verb workflows are for repositories that want
+separate, parallel jobs.
 
-| Workflow | Rule | Job permissions |
+| Workflow | Runs | Job permissions |
 |----------|------|-----------------|
+| `check.yml` | standard verbs check, then `make check` | `contents: read` |
+| `format-check.yml` | `make format-check` | `contents: read` |
 | `lint.yml` | `make lint` | `contents: read` |
+| `typecheck.yml` | `make typecheck` | `contents: read` |
 | `test.yml` | `make test` | `contents: read` |
-| `build.yml` | `make build` | `contents: read` |
-| `docker.yml` | `make docker-build`, then tag and push to GHCR | `contents: read`, `packages: write` |
+| `build.yml` | `make build` (optional verb) | `contents: read` |
+| `docker.yml` | `make docker-build` (optional verb), then tag and push to GHCR | `contents: read`, `packages: write` |
 
 A reusable workflow cannot get more permissions than its caller: grant at least the permissions
 above on the calling job.
 
 ```yaml
 jobs:
-  test:
-    uses: Metrify-App/metrify-workflows/.github/workflows/test.yml@v1
+  check:
+    uses: Metrify-App/metrify-workflows/.github/workflows/check.yml@v1
     permissions:
       contents: read
 ```
 
 ## Common inputs
 
-All four workflows accept:
+All workflows accept:
 
 | Input | Default | Description |
 |-------|---------|-------------|
@@ -76,6 +81,7 @@ image (`concurrency`), so an older run never overwrites `latest` or `develop` wi
 
 | Message | Cause | Fix |
 |---------|-------|-----|
+| `The Makefile lacks the standard verbs: <verbs>` | `check.yml` found standard verbs missing. | Add them; a verb with nothing to do prints `<verb>: nothing to do`. |
 | `The Makefile has no '<rule>' rule` | The workflow is called but the rule does not exist. | Add the rule, or remove the job. |
 | `make docker-build did not produce '<image>'` | `docker-build` does not tag with `$(IMAGE)`. | Use `docker build -t $(IMAGE) .`. |
 | `Git tag '<tag>' is not a release tag (expected vX.Y.Z)` | A pushed tag triggered the workflow. | Restrict the trigger to `tags: ["v*.*.*"]` or use `push: never`. |
