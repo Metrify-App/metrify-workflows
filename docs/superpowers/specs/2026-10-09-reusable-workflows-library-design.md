@@ -287,7 +287,9 @@ Runs on pull requests and on pushes to `main`.
 
 - Commits follow Conventional Commits (`type(scope): summary`).
 - `release.yml` runs `googleapis/release-please-action` (`release-type: simple`) on pushes to
-  `main`. It keeps a release pull request open that updates `CHANGELOG.md` and the manifest.
+  `main`. It keeps a release pull request open that updates `CHANGELOG.md`, `version.txt` and
+  the manifest. That pull request is created with `GITHUB_TOKEN`, so it does not trigger
+  `ci.yml`; this is acceptable because it only touches those three files.
 - Merging the release pull request creates the `vX.Y.Z` tag and the GitHub Release. A following
   job in the same workflow then moves the floating major tag `vX` to the release commit through
   the GitHub API (`gh api`), so no credentials are persisted in a checkout.
