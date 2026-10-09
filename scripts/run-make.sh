@@ -17,7 +17,11 @@ dry_run=$(mktemp)
 trap 'rm -f "$dry_run"' EXIT
 if ! "${runner[@]}" make -n "$rule" "$@" >"$dry_run" 2>&1 &&
   grep -qF "No rule to make target '$rule'" "$dry_run"; then
-  echo "::error::The Makefile has no '$rule' rule. Add it, or stop calling the $rule workflow (see docs/contract.md in Metrify-App/metrify-workflows)." >&2
+  if [[ $rule == install ]]; then
+    echo "::error::The Makefile has no 'install' rule. Every Metrify repo has one; the workflows run it before their verb (see docs/contract.md in Metrify-App/metrify-workflows)." >&2
+  else
+    echo "::error::The Makefile has no '$rule' rule. Add it, or stop calling the $rule workflow (see docs/contract.md in Metrify-App/metrify-workflows)." >&2
+  fi
   exit 1
 fi
 
