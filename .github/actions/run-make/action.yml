@@ -1,7 +1,7 @@
 name: run-make
 description: >-
-  Internal to metrify-workflows, not a public interface. Exports make-env, checks that the
-  Makefile has the rule, then runs it (inside `nix develop` when use-nix is 'true').
+  Internal to metrify-workflows, not a public interface. Exports make-env, runs `make install`,
+  then the rule (inside `nix develop` when use-nix is 'true').
 
 inputs:
   rule:
@@ -29,6 +29,14 @@ runs:
       env:
         MAKE_ENV: ${{ inputs.make-env }}
       run: printf '%s\n' "$MAKE_ENV" | "$GITHUB_ACTION_PATH/../../../scripts/export-make-env.sh"
+
+    # Every Metrify repo has `install` (see docs/contract.md); the verb runs on a fresh runner.
+    - name: make install
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        USE_NIX: ${{ inputs.use-nix }}
+      run: '"$GITHUB_ACTION_PATH/../../../scripts/run-make.sh" install'
 
     - name: make ${{ inputs.rule }}
       shell: bash
