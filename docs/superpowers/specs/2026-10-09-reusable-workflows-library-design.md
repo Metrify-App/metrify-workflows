@@ -33,7 +33,7 @@ Prerequisites:
 |---|---|
 | Make verbs | The Metrify standard (`metrify-template`, `STANDARD.md`): `help install dev format format-check lint typecheck test fix check` in every repo; `build` and `docker-build` optional |
 | Building blocks | One reusable workflow (`workflow_call`) per CI verb (`check`, `format-check`, `lint`, `typecheck`, `test`, `build`, `docker`), built on shared internal composite actions; `check.yml` is the default |
-| Conformity | `check.yml` first fails if the Makefile lacks a standard verb (read from make's rule database, nothing runs) |
+| Conformity | After `make install`, `check.yml` fails if the Makefile lacks a rule for a standard verb (read from make's rule database; no verb recipe runs) |
 | Optional rules | A consumer imports `build.yml` or `docker.yml` only if it implements the optional verb |
 | `make install` | Not a workflow. Every workflow runs `make install` before its verb, as the template's CI did |
 | Tooling | Nix if the consumer has `flake.nix`, otherwise the GitHub runner image plus optional `*-version` inputs |
@@ -81,9 +81,11 @@ section restates what the library relies on. Each repository decides what its ve
 Rules:
 
 - Every workflow runs `make install`, then its verb, in the same job.
-- `check.yml` first checks that the Makefile has every standard verb. It reads make's rule
-  database (`make -pRrq`), so no recipe runs, and fails with one annotation that names every
-  missing verb.
+- After `make install` (and the `make-env` export), `check.yml` checks that the Makefile has a
+  rule (prerequisites or a recipe) for every standard verb; a `.PHONY` entry alone does not
+  count. It reads make's rule database (`make -pRrq`), so no verb recipe runs, and fails with one
+  annotation that names every missing verb. When make cannot read the Makefile, it reports
+  make's message instead.
 - `docker-build` must honour the `IMAGE` variable and keep a local default:
 
   ```make
@@ -117,8 +119,8 @@ Rules:
     release.yml         # internal: release-please and floating major tag
   actions/
     setup-env/action.yml  # internal: Nix or fallback toolchain, caches
-    run-make/action.yml   # internal: exports make-env, runs `make install`, then the verb
-    check-verbs/action.yml # internal: fails when a standard verb is missing
+    run-make/action.yml   # internal: exports make-env, runs `make install`, optionally checks
+                          # the standard verbs (check.yml), then runs the verb
     image-meta/action.yml # internal: image name, build reference and tags to push
     image-push/action.yml # internal: checks $(IMAGE) was built, logs in, tags and pushes
   actionlint.yaml         # ignores the `$/` syntax until actionlint knows it
@@ -167,7 +169,8 @@ Example for `test.yml`:
 2. `uses: $/.github/actions/setup-env`
 3. `uses: $/.github/actions/run-make` with `rule: test`: `make install`, then `make test`.
 
-`check.yml` adds `uses: $/.github/actions/check-verbs` between steps 2 and 3.
+`check.yml` passes `check-verbs: "true"` to `run-make`, which checks the standard verbs between
+`make install` and `make check`.
 
 `$/` is GitHub's self-repository syntax (July 2026, github.com only, runner 2.336.0+). Inside a
 reusable workflow it resolves to the workflow's own repository at the exact commit that is
@@ -303,7 +306,7 @@ Runs on pull requests and on pushes to `main`.
   failure cases call the composites directly in a step with `continue-on-error: true`, then
   assert `steps.<id>.outcome == 'failure'`:
   - `run-make` with a rule that does not exist;
-  - `check-verbs` on `tests/fixtures/missing-verbs`;
+  - `run-make` with `check-verbs: "true"` on `tests/fixtures/missing-verbs`;
   - `run-make` with a malformed `make-env` line;
   - the image check after `docker-build` on `tests/fixtures/bad-image`.
 - **Local runs:** `make act ARGS="-j <job>"` runs a `ci.yml` job in Docker with act. act 0.2.x
