@@ -7,6 +7,13 @@
 - `@v1.2.3` or a commit SHA: frozen; upgrade by hand.
 - `@main`: every merged change immediately, including breaking ones. Avoid it outside tests.
 
+## Prerequisite
+
+release-please opens its pull request with `GITHUB_TOKEN`. The repository (or the organization)
+must allow it: Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to
+create and approve pull requests". Without it, `release.yml` fails with "GitHub Actions is not
+permitted to create or approve pull requests" and no version is published.
+
 ## How a release happens
 
 1. Changes land on `main` through pull requests, with Conventional Commit messages
