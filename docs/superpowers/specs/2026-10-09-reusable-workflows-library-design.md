@@ -379,9 +379,10 @@ jobs:
 updates the template (its own branch and pull request, released as standard version 2 with its
 `bump.sh`):
 
-- `STANDARD.md` and `.claude/rules/metrify-rules.md`: an "Optional verbs" table (`build`,
-  `docker-build` with the `$(IMAGE)` contract) next to the standard verbs.
-- `Makefile`: an `##@ Optional` section showing `build` and `docker-build`, commented out.
+- `STANDARD.md`: an "Optional verbs" table (`build`, `docker-build` with the `$(IMAGE)` contract)
+  next to the standard verbs; `.claude/rules/metrify-rules.md`: one sentence naming them.
+- `Makefile`: a plain comment block before `##@ Project` showing `build` and `docker-build`,
+  commented out (an `##@` header would print an empty section in `make help`).
 - `.github/workflows/ci.yml`: job `check` calls `check.yml@v1`; job `standard` keeps running
   `check-standard.sh`; a commented `docker` job calls `docker.yml@v1` (no Docker Hub secrets).
   It only works once `v1.0.0` of this library is released, so it merges after that release.
