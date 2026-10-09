@@ -9,20 +9,19 @@ on:
 permissions: {}
 
 jobs:
-  lint:
-    uses: Metrify-App/metrify-workflows/.github/workflows/lint.yml@v1
+  check:
+    uses: Metrify-App/metrify-workflows/.github/workflows/check.yml@v1
     permissions:
       contents: read
-
-  test:
-    uses: Metrify-App/metrify-workflows/.github/workflows/test.yml@v1
-    permissions:
-      contents: read
+    with:
+      node-version: "24"
+      cache-paths: ~/.npm
+      cache-key-files: package-lock.json
     secrets:
       make-env: ${{ secrets.TEST_ENV }}
 
   docker:
-    needs: [lint, test]
+    needs: check
     uses: Metrify-App/metrify-workflows/.github/workflows/docker.yml@v1
     permissions:
       contents: read
