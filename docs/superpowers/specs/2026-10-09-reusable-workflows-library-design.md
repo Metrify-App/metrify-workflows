@@ -120,6 +120,10 @@ Example for `test.yml`:
    into `.metrify-workflows/`. This guarantees the composites run at exactly the same version as
    the workflow the consumer referenced (`@v1`, `@main` or a SHA), instead of a hard-coded ref.
    These `job.*` context properties exist on github.com since September 2026 (not on GHES).
+   The checkout is sparse (`.github/actions` and `scripts` only) and `.metrify-workflows/` is
+   added to `.git/info/exclude`. Because local `uses:` paths must live in the workspace, the
+   directory is visible to the consumer's rules: `docs/contract.md` tells consumers to exclude
+   `.metrify-workflows/` from linters and from the Docker build context (`.dockerignore`).
 3. `uses: ./.metrify-workflows/.github/actions/setup-env`
 4. `uses: ./.metrify-workflows/.github/actions/run-make` with `rule: test`.
 
@@ -184,7 +188,7 @@ Default job permissions: `contents: read`.
 | Output | Description |
 |---|---|
 | `image` | Full image name without tag |
-| `tags` | Newline-separated list of full image references that were (or would be) pushed |
+| `tags` | Newline-separated list of full image references that were pushed, empty if none |
 | `digest` | Pushed image digest, empty if nothing was pushed |
 
 A repository that builds several images calls `docker.yml` once per image, with a different
