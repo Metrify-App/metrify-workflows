@@ -1,0 +1,3 @@
+.direnv/
+.metrify-workflows/
+tests/fixtures/plain/.cache/
