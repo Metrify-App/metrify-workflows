@@ -39,10 +39,45 @@ All workflows accept:
 | `go-version` | `""` | Same, for Go. |
 | `cache-paths` | `""` | Extra paths to cache, one per line (for example `~/.npm`). Requires `cache-key-files`. |
 | `cache-key-files` | `""` | One glob, relative to the repository root, hashed into the cache key (for example `**/package-lock.json`). |
+| `app-client-id` | `""` | Client ID of a GitHub App of the organization. When set, a read-only installation token is exported before `make install` (see below). |
+| `app-repositories` | `""` | Repositories of the caller's owner the token can read, comma-separated (for example `metrify-protocol`). Empty: every repository the App is installed on. |
+| `app-token-env` | `GITHUB_APP_TOKEN` | Environment variable that receives the token. |
 
 | Secret | Required | Description |
 |--------|----------|-------------|
 | `make-env` | no | `KEY=VALUE` lines exported, masked, before `make` runs. |
+| `app-private-key` | with `app-client-id` | Private key of that GitHub App. |
+
+### Private dependencies
+
+A repository that installs a private git dependency (for example `metrify-protocol`) gets a
+token from a GitHub App of the organization instead of a personal token: no person owns it, it
+is limited to `contents: read` on `app-repositories`, and it expires with the job. The App needs
+`Contents: Read-only` on those repositories and must be installed on them.
+
+```yaml
+jobs:
+  check:
+    uses: Metrify-App/metrify-workflows/.github/workflows/check.yml@v1
+    permissions:
+      contents: read
+    with:
+      app-client-id: Iv23liExample
+      app-repositories: metrify-protocol
+      app-token-env: METRIFY_PROTOCOL_TOKEN
+    secrets:
+      app-private-key: ${{ secrets.METRIFY_CI_APP_PRIVATE_KEY }}
+```
+
+The Makefile then uses the variable, for example to fetch an SSH URL over HTTPS:
+
+```make
+ifdef METRIFY_PROTOCOL_TOKEN
+export GIT_CONFIG_COUNT = 1
+export GIT_CONFIG_KEY_0 = url.https://x-access-token:$(METRIFY_PROTOCOL_TOKEN)@github.com/Metrify-App/metrify-protocol.insteadOf
+export GIT_CONFIG_VALUE_0 = ssh://git@github.com/Metrify-App/metrify-protocol
+endif
+```
 
 ## docker.yml
 
@@ -89,7 +124,9 @@ image (`concurrency`), so an older run never overwrites `latest` or `develop` wi
 | `Git tag '<tag>' is not a release tag (expected vX.Y.Z)` | A pushed tag triggered the workflow. | Restrict the trigger to `tags: ["v*.*.*"]` or use `push: never`. |
 | `invalid image name '<name>'` | `image-name` has characters GHCR does not accept. | Use lowercase letters, digits, `.`, `_` and `-`. |
 | `unknown push mode` | `push` is not `auto`, `always` or `never`. | Fix the input. |
-| `make-env line N is not KEY=VALUE` | A malformed line in the `make-env` secret. | Fix line N (the value is never printed). |
+| `make-env line N is not KEY=VALUE` | A malformed line in the `make-env` secret, or an `app-token-env` that is not a valid variable name. | Fix line N, or the input (the value is never printed). |
+| `Input required and not supplied: private-key` | `app-client-id` is set without the `app-private-key` secret. | Pass the secret. |
+| `Not Found` when creating the App token | The App is not installed on a repository of `app-repositories`. | Install it there (organization settings, GitHub Apps). |
 | `cache-paths is set but cache-key-files is empty` | A cache without a key would never be refreshed. | Set `cache-key-files`. |
 | `make: command not found` (Nix) | The devShell does not provide make. | Add `gnumake` to the devShell packages. |
 | `The workflow is requesting 'packages: write', but is only allowed 'packages: none'` | The calling job does not grant the permission. | Add `permissions: { contents: read, packages: write }` to the job. |

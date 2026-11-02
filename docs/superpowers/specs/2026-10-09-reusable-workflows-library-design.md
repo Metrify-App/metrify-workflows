@@ -43,6 +43,7 @@ Prerequisites:
 | Push policy | Event-driven (`push: auto`), overridable with `always` / `never` |
 | Release image tags | `vX.Y.Z` only (no floating image tags) |
 | Make secrets | One optional multi-line secret `make-env` (`KEY=VALUE` lines) |
+| Private dependencies | Optional GitHub App (`app-client-id` input, `app-private-key` secret): a read-only installation token exported before `make install`, owned by the organization, expiring with the job |
 | Library releases | release-please, `CHANGELOG.md`, floating major tag `vX` |
 | Recommended consumer ref | `@v1` |
 | Internal actions | Loaded with GitHub's self-repository syntax (`uses: $/...`), which resolves to this repository at the commit of the running workflow |
@@ -209,10 +210,16 @@ cannot reach the scripts without a checkout, so all Docker logic lives in compos
    starting with `#` are skipped). Each non-empty value is masked with `::add-mask::` (with `%`,
    `\r` and `\n` escaped) and, once every line is valid, all pairs are appended to
    `$GITHUB_ENV`. A malformed line fails the step, naming its line number but never its value.
-2. `scripts/run-make.sh install`, then the verb. For each one, `scripts/run-make.sh` checks the rule exists with `make -n <rule>`. When make reports
+2. If `app-client-id` is set, `actions/create-github-app-token` creates an installation token
+   for the caller's owner, limited to `app-repositories` and to `contents: read` whatever the
+   App may do. It is exported through `scripts/export-make-env.sh` (masked, validated name) as
+   `app-token-env` (`GITHUB_APP_TOKEN` by default). The Makefile uses it, typically to rewrite
+   a private git dependency's URL to HTTPS with that token. An App rather than a personal token:
+   no person owns it, and it expires with the job.
+3. `scripts/run-make.sh install`, then the verb. For each one, `scripts/run-make.sh` checks the rule exists with `make -n <rule>`. When make reports
    `No rule to make target '<rule>'`, it emits an `::error::` annotation that names the rule and
    points to `docs/contract.md`. Any other dry-run failure is left to the real run to report.
-3. Run `nix develop --command make <rule> <extra vars>` when a flake is present, otherwise
+4. Run `nix develop --command make <rule> <extra vars>` when a flake is present, otherwise
    `make <rule> <extra vars>`, in `working-directory`. `docker.yml` passes `IMAGE=...` as an
    extra variable.
 
@@ -230,12 +237,16 @@ cannot reach the scripts without a checkout, so all Docker logic lives in compos
 | `go-version` | string | `''` | Fallback only: `actions/setup-go` |
 | `cache-paths` | string | `''` | Extra paths to cache (multi-line) |
 | `cache-key-files` | string | `''` | Glob(s) hashed into the cache key |
+| `app-client-id` | string | `''` | Client ID of a GitHub App; set, a token is exported before `make` |
+| `app-repositories` | string | `''` | Repositories of the caller's owner the token can read |
+| `app-token-env` | string | `GITHUB_APP_TOKEN` | Environment variable that receives the token |
 
 Secrets:
 
 | Secret | Required | Purpose |
 |---|---|---|
 | `make-env` | no | `KEY=VALUE` lines exported (masked) before `make` runs |
+| `app-private-key` | with `app-client-id` | Private key of that GitHub App |
 
 Default job permissions: `contents: read`.
 
