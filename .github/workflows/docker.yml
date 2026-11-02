@@ -40,6 +40,18 @@ on:
         description: Glob, relative to the repository root, hashed into the cache key.
         type: string
         default: ""
+      app-client-id:
+        description: Client ID of a GitHub App whose token make can use (see app-token-env).
+        type: string
+        default: ""
+      app-repositories:
+        description: Repositories of the caller's owner the App token can read, comma-separated.
+        type: string
+        default: ""
+      app-token-env:
+        description: Environment variable that receives the App token, exported before make runs.
+        type: string
+        default: GITHUB_APP_TOKEN
       image-name:
         description: Image name under ghcr.io/<owner>/. Defaults to the repository name.
         type: string
@@ -51,6 +63,9 @@ on:
     secrets:
       make-env:
         description: KEY=VALUE lines exported (masked) before make runs.
+        required: false
+      app-private-key:
+        description: Private key of the GitHub App set in app-client-id.
         required: false
     outputs:
       image:
@@ -122,6 +137,10 @@ jobs:
           use-nix: ${{ steps.env.outputs.use-nix }}
           make-args: IMAGE=${{ steps.meta.outputs.build-ref }}
           make-env: ${{ secrets.make-env }}
+          app-client-id: ${{ inputs.app-client-id }}
+          app-private-key: ${{ secrets.app-private-key }}
+          app-repositories: ${{ inputs.app-repositories }}
+          app-token-env: ${{ inputs.app-token-env }}
 
       - name: Check, tag and push the image
         id: push

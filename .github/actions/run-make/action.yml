@@ -22,6 +22,18 @@ inputs:
   check-verbs:
     description: "'true' to fail, after `make install`, when a standard Metrify verb is missing."
     default: "false"
+  app-client-id:
+    description: Client ID of a GitHub App; when set, an installation token is exported before make runs.
+    default: ""
+  app-private-key:
+    description: Private key of that GitHub App.
+    default: ""
+  app-repositories:
+    description: Repositories of the caller's owner the token can read, comma or newline-separated.
+    default: ""
+  app-token-env:
+    description: Environment variable that receives the token.
+    default: GITHUB_APP_TOKEN
 
 runs:
   using: composite
@@ -32,6 +44,27 @@ runs:
       env:
         MAKE_ENV: ${{ inputs.make-env }}
       run: printf '%s\n' "$MAKE_ENV" | "$GITHUB_ACTION_PATH/../../../scripts/export-make-env.sh"
+
+    # A read-only token of a GitHub App, for private dependencies (e.g. a private git package
+    # fetched by `make install`): it expires with the job and belongs to no person.
+    - name: Create a GitHub App token
+      id: app-token
+      if: inputs.app-client-id != ''
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ inputs.app-client-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ inputs.app-repositories }}
+        permission-contents: read
+
+    - name: Export the GitHub App token
+      if: inputs.app-client-id != ''
+      shell: bash
+      env:
+        TOKEN_ENV: ${{ inputs.app-token-env }}
+        TOKEN: ${{ steps.app-token.outputs.token }}
+      run: printf '%s=%s\n' "$TOKEN_ENV" "$TOKEN" | "$GITHUB_ACTION_PATH/../../../scripts/export-make-env.sh"
 
     # Every Metrify repo has `install` (see docs/contract.md); the verb runs on a fresh runner.
     - name: make install
