@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/Metrify-App/metrify-workflows/compare/v1.0.0...v1.1.0) (2026-11-02)
+
+
+### Features
+
+* **run-make:** export a github app token for private dependencies ([90fb84e](https://github.com/Metrify-App/metrify-workflows/commit/90fb84e21d8a578d6042269be40b4b3652b673c8))
+* **run-make:** export a github app token for private dependencies ([#6](https://github.com/Metrify-App/metrify-workflows/issues/6)) ([631f012](https://github.com/Metrify-App/metrify-workflows/commit/631f012cca17e138caf5dee2d6fe3f36098125bb))
+
 ## 1.0.0 (2026-10-09)
 
 
